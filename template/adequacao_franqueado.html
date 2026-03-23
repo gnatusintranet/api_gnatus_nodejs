@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Carta de Adequação - Ecopower</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .logo {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .logo img {
+            max-width: 200px;
+        }
+        .content {
+            line-height: 1.6;
+        }
+        .button {
+            display: inline-block;
+            background-color: #70B630; /* Verde Ecopower - ajuste conforme necessário */
+            color: white;
+            padding: 12px 24px;
+            text-decoration: none;
+            border-radius: 4px;
+            margin-top: 20px;
+        }
+        .button:hover {
+            background-color: #008647;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">
+            <img src="https://s3bucketaapi.s3.sa-east-1.amazonaws.com/analise_geracao_fatura/1771250402763-536534812.png" alt="Logo Ecopower">
+        </div>
+        <div class="content">
+            <h2>Olá, {{nome_vendedor}}!</h2>
+            <p>Foi enviado a carta de adequação do cliente {{nome_cliente}}.</p>
+            <p>Para acessar a carta de adequação, por favor clique no botão abaixo:</p>
+            <center>
+                <a href="{{link_adequacao}}" class="button">Acessar Carta de Adequação</a>
+            </center>
+            <p style="margin-top: 30px;"><strong>Observação:</strong> Este é um e-mail automático e não recebe respostas.<br>
+                 Caso duvidas, solicite apoio no Sults atendimento engenharia. </p>
+            <p style="margin-top: 20px;">
+                Atenciosamente,<br>
+                Equipe Ecopower
+            </p>
+        </div>
+    </div>
+</body>
+</html>

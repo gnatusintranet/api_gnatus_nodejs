@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reserva de Veículo - Ecopower</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 20px;
+      background-color: #f5f5f5;
+    }
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      background-color: #ffffff;
+      padding: 30px;
+      border-radius: 10px;
+      box-shadow: 0 3px 8px rgba(0,0,0,0.1);
+    }
+    .logo {
+      text-align: center;
+      margin-bottom: 30px;
+    }
+    .logo img {
+      max-width: 180px;
+    }
+    h2 {
+      color: #222;
+      text-align: center;
+      margin-bottom: 10px;
+    }
+    p {
+      color: #333;
+      line-height: 1.6;
+      margin: 8px 0;
+    }
+    .info-box {
+      background-color: #f9f9f9;
+      border-left: 4px solid #70B630;
+      padding: 15px 20px;
+      border-radius: 6px;
+      margin-top: 20px;
+    }
+    .info-box p {
+      margin: 6px 0;
+    }
+    hr {
+      border: none;
+      border-top: 1px solid #e0e0e0;
+      margin: 10px 0;
+    }
+    .button {
+      display: inline-block;
+      background-color: #70B630;
+      color: white;
+      padding: 12px 28px;
+      text-decoration: none;
+      border-radius: 5px;
+      font-weight: bold;
+      margin-top: 25px;
+    }
+    .button:hover {
+      background-color: #008647;
+    }
+    .footer {
+      margin-top: 30px;
+      font-size: 0.9em;
+      color: #777;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>Nova Solicitação de Reserva de Veículo</h2>
+
+    <p>Olá,</p>
+    <p>Uma nova solicitação de reserva de veículo foi registrada no sistema. Confira os detalhes abaixo:</p>
+
+    <div class="info-box">
+      <p><strong>Solicitante:</strong> {{solicitante_nome}}</p>
+      <hr>
+      <p><strong>Veículo:</strong> {{veiculo_nome}}</p>
+      <p><strong>Placa:</strong> {{veiculo_placa}}</p>
+      <hr>
+      <p><strong>Início:</strong> {{data_ini}}</p>
+      <p><strong>Término:</strong> {{data_fim}}</p>
+      <hr>
+      <p><strong>Motivo / Observação:</strong><br>{{motivo_obs}}</p>
+    </div>
+
+    <p class="footer">
+      Este é um e-mail automático e não recebe respostas.<br>
+      A reserva está pendente de aprovação.
+    </p>
+  </div>
+</body>
+</html>
