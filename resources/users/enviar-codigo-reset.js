@@ -14,7 +14,10 @@ module.exports = (app) => ({
 
       try {
         // CORREÇÃO: Usando Mssql.connectAndQuery diretamente
-        const userResult = await Mssql.connectAndQuery(`SELECT ID FROM TAB_INTRANET_USR WHERE EMAIL = '${email}'`);
+        const userResult = await Mssql.connectAndQuery(
+          `SELECT ID FROM TAB_INTRANET_USR WHERE EMAIL = @email`,
+          { email }
+        );
 
         if (!userResult || userResult.length === 0) {
           return res.status(500).json({ message: 'O e-mail informado não foi encontrado.' });
@@ -23,16 +26,15 @@ module.exports = (app) => ({
         const codigo = generateVerificationCode();
         const expireDate = new Date(Date.now() + 15 * 60 * 1000);
 
-        // CORREÇÃO: Usando Mssql.connectAndQuery diretamente
         await Mssql.connectAndQuery(`
           MERGE TAB_VERIFICACAO_INTRANET AS target
-          USING (SELECT '${email}' AS Email) AS source
+          USING (SELECT @email AS Email) AS source
           ON (target.Email = source.Email)
           WHEN MATCHED THEN
-            UPDATE SET Codigo = '${codigo}', DataExpiracao = '${expireDate.toISOString()}'
+            UPDATE SET Codigo = @codigo, DataExpiracao = @dataExpiracao
           WHEN NOT MATCHED THEN
-            INSERT (Email, Codigo, DataExpiracao) VALUES ('${email}', '${codigo}', '${expireDate.toISOString()}');
-        `);
+            INSERT (Email, Codigo, DataExpiracao) VALUES (@email, @codigo, @dataExpiracao);
+        `, { email, codigo, dataExpiracao: expireDate });
         
         await sendVerificationEmail(email, codigo);
         return res.json({ message: 'Código enviado para o seu e-mail.' });

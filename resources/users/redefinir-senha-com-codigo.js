@@ -12,18 +12,26 @@ module.exports = (app) => ({
 
         try {
             // CORREÇÃO: Usando Mssql.connectAndQuery diretamente
-            const codeResult = await Mssql.connectAndQuery(`SELECT Codigo, DataExpiracao FROM TAB_VERIFICACAO_INTRANET WHERE Email = '${email}'`);
+            const codeResult = await Mssql.connectAndQuery(
+                `SELECT Codigo, DataExpiracao FROM TAB_VERIFICACAO_INTRANET WHERE Email = @email`,
+                { email }
+            );
 
             if (codeResult.length === 0 || codeResult[0].Codigo !== codigo || new Date() > new Date(codeResult[0].DataExpiracao)) {
                 return res.status(400).json({ message: 'Código inválido ou expirado. Por favor, solicite um novo.' });
             }
-        
 
-            // CORREÇÃO: Usando Mssql.connectAndQuery diretamente
-            await Mssql.connectAndQuery(`UPDATE TAB_INTRANET_USR SET SENHA = '${bcrypt.hashSync(novaSenha, 10)}' WHERE EMAIL = '${email}' AND ATIVO = 1`);
+            const senhaHash = bcrypt.hashSync(novaSenha, 10);
 
-            // CORREÇÃO: Usando Mssql.connectAndQuery diretamente
-            await Mssql.connectAndQuery(`DELETE FROM TAB_VERIFICACAO_INTRANET WHERE Email = '${email}'`);
+            await Mssql.connectAndQuery(
+                `UPDATE TAB_INTRANET_USR SET SENHA = @senha WHERE EMAIL = @email AND ATIVO = 1`,
+                { senha: senhaHash, email }
+            );
+
+            await Mssql.connectAndQuery(
+                `DELETE FROM TAB_VERIFICACAO_INTRANET WHERE Email = @email`,
+                { email }
+            );
 
             return res.json({ message: 'Senha atualizada com sucesso!' });
         } catch (error) {

@@ -20,22 +20,22 @@ module.exports = app => ({
           IF NOT EXISTS (
             SELECT 1
             FROM TAB_INTRANET_USR_PERMISSOES WITH (NOLOCK)
-            WHERE ID_USER = ${idUser} AND ID_PERMISSAO = ${idPerm} AND MATRICULA = '${MATRICULA}'
+            WHERE ID_USER = ${idUser} AND ID_PERMISSAO = ${idPerm} AND MATRICULA = @matricula
           )
           BEGIN
             INSERT INTO TAB_INTRANET_USR_PERMISSOES (ID_USER, ID_PERMISSAO, MATRICULA)
-            VALUES (${idUser}, ${idPerm}, '${MATRICULA}');
+            VALUES (${idUser}, ${idPerm}, @matricula);
           END
         END
         ELSE
         BEGIN
           DELETE FROM TAB_INTRANET_USR_PERMISSOES
-          WHERE ID_USER = ${idUser} AND ID_PERMISSAO = ${idPerm} AND MATRICULA = '${MATRICULA}';
+          WHERE ID_USER = ${idUser} AND ID_PERMISSAO = ${idPerm} AND MATRICULA = @matricula;
         END
         COMMIT TRANSACTION;
       `;
 
-      await Mssql.connectAndQuery(query);
+      await Mssql.connectAndQuery(query, { matricula: MATRICULA });
       return res.status(200).json({
         message: 'Permissões atualizada com sucesso.',
         ID_USER: idUser,

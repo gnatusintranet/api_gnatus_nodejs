@@ -43,13 +43,10 @@ async function getUserByEmail(Mssql, tableName, fields, email) {
 
   const query = `SELECT ${fields.join(
     ", "
-  )} FROM ${tableName} WHERE EMAIL = '${email}' AND ATIVO = 1`;
-  const params = {
-    email: email,
-  };
+  )} FROM ${tableName} WHERE EMAIL = @email AND ATIVO = 1`;
 
   try {
-    const [user] = await Mssql.connectAndQuery(query, params);
+    const [user] = await Mssql.connectAndQuery(query, { email });
     //console.log(user)
     // if (!user) {
     //   throw new Error("Usuário não encontrado");

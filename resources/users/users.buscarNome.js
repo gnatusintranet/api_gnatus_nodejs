@@ -16,12 +16,12 @@ module.exports = app => ({
         console.log(userId)
 
         const sql = `
-            SELECT NOME, MATRICULA 
-            FROM TAB_INTRANET_USR 
-            WHERE ATIVO = 1 AND ID = ${userId}
+            SELECT NOME, MATRICULA
+            FROM TAB_INTRANET_USR
+            WHERE ATIVO = 1 AND ID = @id
         `;
 
-        const data = await Mssql.connectAndQuery(sql); 
+        const data = await Mssql.connectAndQuery(sql, { id: userId });
       
         if (data && data.length > 0) {
             return res.json(data[0]);

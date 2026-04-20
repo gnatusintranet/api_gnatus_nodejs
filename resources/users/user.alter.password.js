@@ -13,12 +13,10 @@ module.exports = (app) => ({
     try {
       const { NOME, MATRICULA } = req.user[0];
 
-      const alterPassword = `
-            UPDATE TAB_INTRANET_USR 
-            SET SENHA = '${bcrypt.hashSync(SENHA, 10)}'
-            WHERE MATRICULA = '${MATRICULA}'
-        `;
-      await Mssql.connectAndQuery(alterPassword);
+      await Mssql.connectAndQuery(
+        `UPDATE TAB_INTRANET_USR SET SENHA = @senha WHERE MATRICULA = @matricula`,
+        { senha: bcrypt.hashSync(SENHA, 10), matricula: MATRICULA }
+      );
 
       return res.status(200).json({
         message: `senha alterada com sucesso  ${NOME} - ${MATRICULA}`,

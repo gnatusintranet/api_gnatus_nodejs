@@ -6,16 +6,15 @@ module.exports = app => ({
     const { Mssql } = app.services;
     const { ID } = req.params;
 
-    if (!ID) {
+    const id = parseInt(ID, 10);
+    if (!id || isNaN(id)) {
       return res.status(400).json({ message: "ID inválido ou não informado." });
     }
 
     try {
       const result = await Mssql.connectAndQuery(
-        `
-        DELETE FROM TAB_INTRANET_PERMISSOES
-        WHERE ID = ${ID}
-        `   
+        `DELETE FROM TAB_INTRANET_PERMISSOES WHERE ID = @id`,
+        { id }
       );
       if (result && result.rowsAffected && result.rowsAffected[0] === 0) {
         return res.status(404).json({ message: "Permissão não encontrada." });

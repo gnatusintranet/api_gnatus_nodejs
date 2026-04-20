@@ -11,8 +11,9 @@ module.exports = (app) => ({
       const primeiroNome = formatName[0];
       const ultimoNome = formatName[formatName.length - 1];
 
-      const permissoes = await Mssql.connectAndQuery(        
-        `SELECT ID_PERMISSAO FROM TAB_INTRANET_USR_PERMISSOES WHERE ID_USER = '${ID}'`
+      const permissoes = await Mssql.connectAndQuery(
+        `SELECT ID_PERMISSAO FROM TAB_INTRANET_USR_PERMISSOES WHERE ID_USER = @id`,
+        { id: ID }
       );
 
       const mapPermissions = permissoes.map(p => p.ID_PERMISSAO);

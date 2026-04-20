@@ -21,17 +21,18 @@ module.exports = app => ({
     }
 
 
-    try {       
-      await Mssql.connectAndQuery(
-        `
-      UPDATE TAB_INTRANET_PERMISSOES
-      SET
-      [ID_PERMISSAO]  = ${permissao.ID_PERMISSAO},
-      [NOME] = '${norm(permissao.NOME)}',
-      [MODULO] = '${norm(permissao.MODULO)}'
+    const id = parseInt(ID, 10);
+    const idPermissao = parseInt(permissao.ID_PERMISSAO, 10);
+    if (isNaN(id) || isNaN(idPermissao)) {
+      return res.status(400).json({ message: 'ID inválido.' });
+    }
 
-      WHERE [ID] = ${ID}
-    `
+    try {
+      await Mssql.connectAndQuery(
+        `UPDATE TAB_INTRANET_PERMISSOES
+         SET [ID_PERMISSAO] = @idPermissao, [NOME] = @nome, [MODULO] = @modulo
+         WHERE [ID] = @id`,
+        { id, idPermissao, nome: permissao.NOME, modulo: permissao.MODULO }
       );
       return res.status(200).json({ message: 'Permissão atualizada com sucesso' });
     } catch (error) {
