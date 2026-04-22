@@ -1,23 +1,23 @@
-// Cobrança: contas a receber em aberto com atraso > 5 dias (D+5 ou mais).
-// Retorna tanto a lista detalhada quanto um agregado por cliente pra
-// facilitar o trabalho da equipe de cobrança.
+// Painel de cobrança: títulos em atraso (D+N) agregados por cliente.
+// Exclui E1_TIPO IN ('RA','NCC') — adiantamentos e créditos do cliente
+// não são títulos a cobrar.
 const trim = (v) => String(v || '').trim();
 const toNumber = (v) => Number(v || 0);
 
 const faixaAtraso = (dias) => {
-  if (dias <= 15)  return { codigo: 'A_6_15',   label: '6-15 dias',   cor: '#f5a500' };
-  if (dias <= 30)  return { codigo: 'A_16_30',  label: '16-30 dias',  cor: '#e55a1a' };
-  if (dias <= 60)  return { codigo: 'A_31_60',  label: '31-60 dias',  cor: '#c9302c' };
-  if (dias <= 90)  return { codigo: 'A_61_90',  label: '61-90 dias',  cor: '#8a1f1b' };
-  return             { codigo: 'A_90_MAIS', label: '90+ dias',    cor: '#4a0e0e' };
+  if (dias <= 15)  return { codigo: 'A_6_15',    label: '6-15 dias',  cor: '#f5a500' };
+  if (dias <= 30)  return { codigo: 'A_16_30',   label: '16-30 dias', cor: '#e55a1a' };
+  if (dias <= 60)  return { codigo: 'A_31_60',   label: '31-60 dias', cor: '#c9302c' };
+  if (dias <= 90)  return { codigo: 'A_61_90',   label: '61-90 dias', cor: '#8a1f1b' };
+  return             { codigo: 'A_90_MAIS', label: '90+ dias',   cor: '#4a0e0e' };
 };
 
 module.exports = (app) => ({
   verb: 'get',
-  route: '/cobranca',
+  route: '/painel',
 
   handler: async (req, res) => {
-    const { Protheus } = app.services;
+    const { Protheus, Mssql } = app.services;
     const { cliente, uf, faixa } = req.query;
     const diasMinimos = Number(req.query.diasMinimos || 5);
 
@@ -25,7 +25,7 @@ module.exports = (app) => ({
     const conds = [];
     if (cliente) {
       params.cliente = String(cliente).toUpperCase();
-      conds.push(`AND (UPPER(sa1.A1_NOME) LIKE '%' + @cliente + '%' OR RTRIM(se1.E1_CLIENTE) = @cliente OR RTRIM(se1.E1_NOMCLI) LIKE '%' + @cliente + '%')`);
+      conds.push(`AND (UPPER(sa1.A1_NOME) LIKE '%' + @cliente + '%' OR RTRIM(se1.E1_CLIENTE) = @cliente OR UPPER(RTRIM(se1.E1_NOMCLI)) LIKE '%' + @cliente + '%')`);
     }
     if (uf) {
       params.uf = String(uf).toUpperCase();
@@ -66,6 +66,7 @@ module.exports = (app) => ({
       WHERE se1.D_E_L_E_T_ <> '*'
         AND se1.E1_SALDO > 0
         AND (se1.E1_BAIXA = '' OR se1.E1_BAIXA IS NULL)
+        AND RTRIM(se1.E1_TIPO) NOT IN ('RA', 'NCC')
         AND DATEDIFF(day, CONVERT(date, se1.E1_VENCREA, 112), GETDATE()) >= @diasMinimos
         ${conds.join(' ')}
       ORDER BY DATEDIFF(day, CONVERT(date, se1.E1_VENCREA, 112), GETDATE()) DESC
@@ -107,10 +108,43 @@ module.exports = (app) => ({
         ? titulos.filter(t => t.faixa.codigo === String(faixa))
         : titulos;
 
+      // Pega status e última ação de cada cliente que apareceu (Intranet DB)
+      const clienteKeys = [...new Set(filtrados.map(t => `${t.clienteCod}|${t.clienteLoja}`))];
+      let statusMap = new Map();
+      let ultimaAcaoMap = new Map();
+      if (clienteKeys.length > 0) {
+        try {
+          const statusRows = await Mssql.connectAndQuery(
+            `SELECT CLIENTE_COD, CLIENTE_LOJA, STATUS, OBSERVACAO, DT_ATUALIZACAO
+               FROM TAB_COBRANCA_STATUS_CLIENTE`,
+            {}
+          );
+          statusRows.forEach(s => statusMap.set(`${trim(s.CLIENTE_COD)}|${trim(s.CLIENTE_LOJA)}`, {
+            status: trim(s.STATUS), observacao: s.OBSERVACAO, dt: s.DT_ATUALIZACAO
+          }));
+
+          const acoesRows = await Mssql.connectAndQuery(
+            `SELECT CLIENTE_COD, CLIENTE_LOJA, TIPO_ACAO, RESULTADO, DATA_PROMESSA, VALOR_PROMETIDO, CRIADO_EM,
+                    ROW_NUMBER() OVER (PARTITION BY CLIENTE_COD, CLIENTE_LOJA ORDER BY CRIADO_EM DESC) rn
+               FROM TAB_COBRANCA_ACAO`,
+            {}
+          );
+          acoesRows.filter(a => a.rn === 1).forEach(a => ultimaAcaoMap.set(`${trim(a.CLIENTE_COD)}|${trim(a.CLIENTE_LOJA)}`, {
+            tipoAcao: trim(a.TIPO_ACAO),
+            resultado: trim(a.RESULTADO),
+            dataPromessa: a.DATA_PROMESSA,
+            valorPrometido: a.VALOR_PROMETIDO,
+            criadoEm: a.CRIADO_EM
+          }));
+        } catch (e) {
+          console.warn('Cobrança painel: falha ao carregar status/ações — seguindo sem enriquecer.', e.message);
+        }
+      }
+
       // Agrega por cliente
       const porClienteMap = new Map();
       filtrados.forEach(t => {
-        const key = `${t.clienteCod}-${t.clienteLoja}`;
+        const key = `${t.clienteCod}|${t.clienteLoja}`;
         if (!porClienteMap.has(key)) {
           porClienteMap.set(key, {
             clienteCod: t.clienteCod,
@@ -125,7 +159,9 @@ module.exports = (app) => ({
             totalSaldo: 0,
             qtdTitulos: 0,
             maiorAtraso: 0,
-            titulos: []
+            titulos: [],
+            statusCobranca: statusMap.get(key) || null,
+            ultimaAcao: ultimaAcaoMap.get(key) || null
           });
         }
         const agg = porClienteMap.get(key);
@@ -159,7 +195,7 @@ module.exports = (app) => ({
         porCliente
       });
     } catch (error) {
-      console.error('Erro em financeiro/cobranca:', error);
+      console.error('Erro em cobranca/painel:', error);
       return res.status(500).json({ message: 'Erro ao consultar cobrança.' });
     }
   }
