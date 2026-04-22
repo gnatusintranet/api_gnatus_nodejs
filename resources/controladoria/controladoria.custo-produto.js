@@ -1,12 +1,14 @@
-// Custo de produto: explode estrutura SG1 (componentes diretos - 1 nível) +
-// anexa última compra de cada componente (SD1 + SF1) com impostos + histórico
-// de variação dos últimos N meses.
+// Custo de produto: explode estrutura SG1 RECURSIVAMENTE (até maxNivel) para
+// produtos PA/PI, anexa última compra (SD1+SF1) e histórico de variação.
 //
-// Útil pra o time de engenharia / controladoria validar o custo teórico x real
-// e identificar itens com variação de preço.
+// Componentes PI com estrutura própria recebem `subComponentes`, permitindo
+// vista totalmente explodida de toda a árvore de materiais. O custo total
+// do PA é calculado apenas no 1º nível (componentes diretos) para não dobrar
+// valores — os subcomponentes são exibidos para fins de composição/análise.
 
 const trim = (v) => String(v || '').trim();
 const toN  = (v) => Number(v || 0);
+const MAX_NIVEL = 5;
 
 module.exports = (app) => ({
   verb: 'get',
@@ -36,54 +38,92 @@ module.exports = (app) => ({
       if (!prod.length) return res.status(404).json({ message: 'Produto não encontrado.' });
       const p = prod[0];
 
-      // 2) Estrutura (1 nível, componentes ativos pela validade G1_INI <= hoje <= G1_FIM)
-      const estr = await Protheus.connectAndQuery(
-        `SELECT RTRIM(sg1.G1_COMP) componente,
-                RTRIM(sb1.B1_DESC) descricao,
-                RTRIM(sb1.B1_TIPO) tipo,
-                RTRIM(sb1.B1_UM)   um,
-                sg1.G1_QUANT qtd,
-                sg1.G1_PERDA perda,
-                sg1.G1_INI   validIni,
-                sg1.G1_FIM   validFim,
-                sb1.B1_CUSTD custoPadrao
-           FROM SG1010 sg1 WITH (NOLOCK)
-           LEFT JOIN SB1010 sb1 WITH (NOLOCK)
-             ON sb1.B1_COD = sg1.G1_COMP AND sb1.D_E_L_E_T_ <> '*'
-          WHERE sg1.D_E_L_E_T_ <> '*'
-            AND sg1.G1_COD = @produto
-            AND sg1.G1_INI <= @hoje AND sg1.G1_FIM >= @hoje
-          ORDER BY sg1.G1_COMP`,
-        { produto, hoje: hojeYmd }
-      );
-      if (!estr.length) {
+      // 2) Explosão iterativa por níveis
+      //    estrutura[pai] = [{ componente, descricao, tipo, um, qtd, perda, custoPadrao, nivel }]
+      const porPai  = new Map();
+      const todosCods = new Set();
+      let paisAtuais = [produto];
+      let nivel = 0;
+
+      while (paisAtuais.length > 0 && nivel < MAX_NIVEL) {
+        const paisUnicos = [...new Set(paisAtuais)].filter(c => !porPai.has(c));
+        if (!paisUnicos.length) break;
+
+        const inCods = paisUnicos.map((_, i) => `@pai${i}`).join(',');
+        const params = { hoje: hojeYmd };
+        paisUnicos.forEach((c, i) => { params[`pai${i}`] = c; });
+
+        const rows = await Protheus.connectAndQuery(
+          `SELECT RTRIM(sg1.G1_COD)   pai,
+                  RTRIM(sg1.G1_COMP)  componente,
+                  RTRIM(sb1.B1_DESC)  descricao,
+                  RTRIM(sb1.B1_TIPO)  tipo,
+                  RTRIM(sb1.B1_UM)    um,
+                  sg1.G1_QUANT        qtd,
+                  sg1.G1_PERDA        perda,
+                  sb1.B1_CUSTD        custoPadrao
+             FROM SG1010 sg1 WITH (NOLOCK)
+             LEFT JOIN SB1010 sb1 WITH (NOLOCK)
+               ON sb1.B1_COD = sg1.G1_COMP AND sb1.D_E_L_E_T_ <> '*'
+            WHERE sg1.D_E_L_E_T_ <> '*'
+              AND sg1.G1_COD IN (${inCods})
+              AND sg1.G1_INI <= @hoje AND sg1.G1_FIM >= @hoje
+            ORDER BY sg1.G1_COD, sg1.G1_COMP`,
+          params
+        );
+
+        const proxPais = [];
+        paisUnicos.forEach(pai => porPai.set(pai, []));
+        rows.forEach(r => {
+          const pai = trim(r.pai);
+          const item = {
+            componente: trim(r.componente),
+            descricao: trim(r.descricao),
+            tipo: trim(r.tipo),
+            um: trim(r.um),
+            qtd: toN(r.qtd),
+            perda: toN(r.perda),
+            custoPadrao: toN(r.custoPadrao)
+          };
+          porPai.get(pai).push(item);
+          todosCods.add(item.componente);
+          if (item.tipo === 'PI' && !porPai.has(item.componente)) {
+            proxPais.push(item.componente);
+          }
+        });
+
+        paisAtuais = proxPais;
+        nivel += 1;
+      }
+
+      const componentesRaiz = porPai.get(produto) || [];
+      if (!componentesRaiz.length) {
         return res.json({
           produto: {
             cod: trim(p.cod), descricao: trim(p.descricao), tipo: trim(p.tipo),
             um: trim(p.um), custoPadrao: toN(p.custoPadrao), ncm: trim(p.ncm),
-            grupo: trim(p.grupo)
+            grupo: trim(p.grupo), tipoProc: trim(p.tipoProc)
           },
           aviso: 'Produto não tem estrutura (SG1) válida cadastrada para hoje.',
           componentes: [],
           historicoAgregado: [],
-          totais: { custoComponentes: 0, impostosTotal: 0, custoTotal: 0 },
+          totais: { custoComponentes: 0, impostosTotal: 0, custoTotal: 0, diffDoCustoPadrao: -toN(p.custoPadrao), qtdComponentes: 0 },
+          parametros: { histMeses, histInicio: histIniYmd, maxNivel: MAX_NIVEL },
           geradoEm: new Date().toISOString()
         });
       }
 
-      const codigos = estr.map(e => trim(e.componente));
+      // 3) Buscar última compra e histórico de TODOS os componentes encontrados (qualquer nível)
+      const todos = [...todosCods];
+      const inTodos = todos.map((_, i) => `@c${i}`).join(',');
+      const paramsCompra = {};
+      todos.forEach((c, i) => { paramsCompra[`c${i}`] = c; });
 
-      // 3) Última compra de cada componente (SD1+SF1 com maior F1_EMISSAO)
-      const inClause = codigos.map((_, i) => `@c${i}`).join(',');
-      const paramsCompra = { };
-      codigos.forEach((c, i) => { paramsCompra[`c${i}`] = c; });
-
-      const ultCompra = await Protheus.connectAndQuery(
+      const ultCompra = todos.length ? await Protheus.connectAndQuery(
         `WITH ranked AS (
           SELECT RTRIM(sd1.D1_COD)     componente,
                  RTRIM(sd1.D1_DOC)     doc,
                  RTRIM(sd1.D1_SERIE)   serie,
-                 RTRIM(sd1.D1_ITEM)    item,
                  RTRIM(sd1.D1_FORNECE) fornece,
                  RTRIM(sd1.D1_LOJA)    loja,
                  RTRIM(sa2.A2_NOME)    fornecedor,
@@ -113,24 +153,22 @@ module.exports = (app) => ({
              AND sa2.A2_LOJA = sd1.D1_LOJA
              AND sa2.D_E_L_E_T_ <> '*'
            WHERE sd1.D_E_L_E_T_ <> '*'
-             AND sd1.D1_COD IN (${inClause})
+             AND sd1.D1_COD IN (${inTodos})
              AND sd1.D1_QUANT > 0
         )
         SELECT * FROM ranked WHERE rn = 1`,
         paramsCompra
-      );
+      ) : [];
 
       const mapUlt = new Map();
       ultCompra.forEach(u => mapUlt.set(trim(u.componente), u));
 
-      // 4) Histórico de compras (últimas 12 meses) — para variação ao longo do tempo
+      // 4) Histórico (usado para gráfico e variação por componente)
       const paramsHist = { histIni: histIniYmd, ...paramsCompra };
-      const hist = await Protheus.connectAndQuery(
+      const hist = todos.length ? await Protheus.connectAndQuery(
         `SELECT RTRIM(sd1.D1_COD)     componente,
                 RTRIM(sd1.D1_DOC)     doc,
                 RTRIM(sd1.D1_SERIE)   serie,
-                RTRIM(sd1.D1_FORNECE) fornece,
-                RTRIM(sd1.D1_LOJA)    loja,
                 RTRIM(sa2.A2_NREDUZ)  fornecedorFantasia,
                 sf1.F1_EMISSAO        emissao,
                 sd1.D1_QUANT          qtd,
@@ -151,13 +189,12 @@ module.exports = (app) => ({
             AND sa2.A2_LOJA = sd1.D1_LOJA
             AND sa2.D_E_L_E_T_ <> '*'
           WHERE sd1.D_E_L_E_T_ <> '*'
-            AND sd1.D1_COD IN (${inClause})
+            AND sd1.D1_COD IN (${inTodos})
             AND sd1.D1_QUANT > 0
           ORDER BY sd1.D1_COD, sf1.F1_EMISSAO ASC`,
         paramsHist
-      );
+      ) : [];
 
-      // Agrupa histórico por componente
       const histByComp = {};
       hist.forEach(h => {
         const k = trim(h.componente);
@@ -173,85 +210,96 @@ module.exports = (app) => ({
         });
       });
 
-      // 5) Consolida componentes com custo real (via última compra vunit)
-      let custoComponentes = 0;
-      let impostosTotal    = 0;
+      // 5) Monta árvore recursivamente. `fator` acumula quantidade efetiva ao descer.
+      const montar = (codPai, fatorPai = 1, profundidade = 0) => {
+        const itens = porPai.get(codPai) || [];
+        return itens.map(c => {
+          const cod = c.componente;
+          const qtdEfetiva = c.qtd * (1 + c.perda); // aplica perda percentual
+          const fator = qtdEfetiva * fatorPai;       // quanto vai no PA raiz
+          const u = mapUlt.get(cod);
 
-      const componentes = estr.map(c => {
-        const cod = trim(c.componente);
-        const qtd = toN(c.qtd) + toN(c.qtd) * toN(c.perda); // aplica perda percentual ao qtd
-        const u = mapUlt.get(cod);
-        let ultimaCompra = null;
-        let custoReal = toN(c.custoPadrao);
-        let impostos = 0;
+          let ultimaCompra = null;
+          let custoReal = c.custoPadrao;
+          let impostos = 0;
 
-        if (u) {
-          const vu     = toN(u.vunit);
-          const qtdCp  = toN(u.qtdComprada);
-          const icms   = toN(u.icms);
-          const ipi    = toN(u.ipi);
-          const pis    = toN(u.pis);
-          const cofins = toN(u.cofins);
-          const totalNF = toN(u.total);
-          // impostos rateados para a quantidade necessária pelo BOM
-          const impPorUnid = qtdCp > 0 ? (icms + ipi + pis + cofins) / qtdCp : 0;
-          impostos = impPorUnid * qtd;
-          custoReal = vu * qtd;
+          if (u) {
+            const vu     = toN(u.vunit);
+            const qtdCp  = toN(u.qtdComprada);
+            const icms   = toN(u.icms);
+            const ipi    = toN(u.ipi);
+            const pis    = toN(u.pis);
+            const cofins = toN(u.cofins);
+            const totalNF = toN(u.total);
+            const impPorUnid = qtdCp > 0 ? (icms + ipi + pis + cofins) / qtdCp : 0;
+            impostos  = impPorUnid * qtdEfetiva;  // impostos por unidade produzida pelo pai
+            custoReal = vu * qtdEfetiva;
 
-          ultimaCompra = {
-            emissao: trim(u.emissao),
-            nfDoc: trim(u.doc),
-            nfSerie: trim(u.serie),
-            fornecedorCod: trim(u.fornece),
-            fornecedorLoja: trim(u.loja),
-            fornecedor: trim(u.fornecedor),
-            fornecedorFantasia: trim(u.fornecedorFantasia),
-            qtdComprada: qtdCp,
-            vunit: vu,
-            totalItem: totalNF,
-            icms, ipi, pis, cofins,
-            desconto: toN(u.desconto),
-            cfop: trim(u.cfop),
-            impostoUnitario: impPorUnid
+            ultimaCompra = {
+              emissao: trim(u.emissao),
+              nfDoc: trim(u.doc),
+              nfSerie: trim(u.serie),
+              fornecedorCod: trim(u.fornece),
+              fornecedorLoja: trim(u.loja),
+              fornecedor: trim(u.fornecedor),
+              fornecedorFantasia: trim(u.fornecedorFantasia),
+              qtdComprada: qtdCp,
+              vunit: vu,
+              totalItem: totalNF,
+              icms, ipi, pis, cofins,
+              desconto: toN(u.desconto),
+              cfop: trim(u.cfop),
+              impostoUnitario: impPorUnid
+            };
+          }
+
+          const historico = histByComp[cod] || [];
+          let variacao = null;
+          if (historico.length >= 2) {
+            const primeiro = historico[0].vunit;
+            const ultimo   = historico[historico.length - 1].vunit;
+            if (primeiro > 0) variacao = ((ultimo - primeiro) / primeiro) * 100;
+          }
+
+          // Recursivamente explode se o componente é PI e tem sub-estrutura
+          const subComponentes = (c.tipo === 'PI' && porPai.has(cod) && porPai.get(cod).length > 0 && profundidade < MAX_NIVEL)
+            ? montar(cod, fator, profundidade + 1)
+            : [];
+
+          return {
+            componente: cod,
+            descricao: c.descricao,
+            tipo: c.tipo,
+            um: c.um,
+            qtd: c.qtd,
+            perda: c.perda,
+            qtdComPerda: qtdEfetiva,
+            qtdEfetivaNoPA: fator,
+            custoPadrao: c.custoPadrao,
+            custoReal,
+            impostos,
+            custoComImpostos: custoReal + impostos,
+            ultimaCompra,
+            historico,
+            qtdHistorico: historico.length,
+            variacaoPercentual: variacao,
+            temSubEstrutura: subComponentes.length > 0,
+            subComponentes,
+            nivel: profundidade
           };
-        }
+        });
+      };
 
-        const historico = histByComp[cod] || [];
+      const componentes = montar(produto, 1, 0).sort((a, b) => (b.custoReal || 0) - (a.custoReal || 0));
 
-        // Variação % entre primeira e última compra no período
-        let variacao = null;
-        if (historico.length >= 2) {
-          const primeiro = historico[0].vunit;
-          const ultimo   = historico[historico.length - 1].vunit;
-          if (primeiro > 0) variacao = ((ultimo - primeiro) / primeiro) * 100;
-        }
+      // 6) Totais — somam apenas o 1º nível (árvore explodida é só pra detalhamento visual)
+      const custoComponentes = componentes.reduce((s, c) => s + (c.custoReal || 0), 0);
+      const impostosTotal    = componentes.reduce((s, c) => s + (c.impostos || 0), 0);
 
-        custoComponentes += custoReal;
-        impostosTotal    += impostos;
-
-        return {
-          componente: cod,
-          descricao: trim(c.descricao),
-          tipo: trim(c.tipo),
-          um: trim(c.um),
-          qtd: toN(c.qtd),
-          perda: toN(c.perda),
-          qtdComPerda: qtd,
-          custoPadrao: toN(c.custoPadrao),
-          custoReal,
-          impostos,
-          custoComImpostos: custoReal + impostos,
-          ultimaCompra,
-          historico,
-          qtdHistorico: historico.length,
-          variacaoPercentual: variacao
-        };
-      }).sort((a, b) => (b.custoReal || 0) - (a.custoReal || 0));
-
-      // 6) Histórico agregado por mês (para gráfico)
+      // 7) Histórico agregado por mês (para gráfico)
       const aggMes = {};
       hist.forEach(h => {
-        const ym = trim(h.emissao).slice(0, 6); // YYYYMM
+        const ym = trim(h.emissao).slice(0, 6);
         if (!aggMes[ym]) aggMes[ym] = { mes: ym, qtd: 0, valor: 0, nLancam: 0 };
         aggMes[ym].qtd    += toN(h.qtd);
         aggMes[ym].valor  += toN(h.total);
@@ -288,7 +336,7 @@ module.exports = (app) => ({
           qtdComponentes: componentes.length
         },
         historicoAgregado,
-        parametros: { histMeses, histInicio: histIniYmd },
+        parametros: { histMeses, histInicio: histIniYmd, maxNivel: MAX_NIVEL },
         geradoEm: new Date().toISOString()
       });
     } catch (err) {
