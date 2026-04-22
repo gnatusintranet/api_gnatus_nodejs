@@ -7,6 +7,17 @@ const toProtheusDate = (iso) => {
 const trim = (v) => String(v || '').trim();
 const toNumber = (v) => Number(v || 0);
 
+// Status do SCR010 (alçada de aprovação)
+const decodeStatusAprovacao = (s) => {
+  switch (trim(s)) {
+    case '02': return { codigo: 'LIBERADO',  label: 'Liberado',  cor: '#09A013' };
+    case '03': return { codigo: 'PENDENTE',  label: 'Pendente',  cor: '#f5a500' };
+    case '05': return { codigo: 'BLOQUEADO', label: 'Bloqueado', cor: '#8093ac' };
+    case '06': return { codigo: 'REJEITADO', label: 'Rejeitado', cor: '#c9302c' };
+    default:   return { codigo: trim(s),     label: trim(s),     cor: '#6b7a90' };
+  }
+};
+
 const calcStatusSC1 = (r) => {
   const quant = toNumber(r.C1_QUANT);
   const quje = toNumber(r.C1_QUJE);
@@ -89,6 +100,66 @@ module.exports = (app) => ({
     try {
       const rows = await Protheus.connectAndQuery(sql, params);
 
+      // Busca aprovações em SCR010 (CR_TIPO='SC') para os números retornados
+      // e mapeia código de aprovador -> nome via SYS_USR. Usa batches de 500
+      // para não estourar limite de parâmetros.
+      const numeros = [...new Set(rows.map(r => trim(r.numero)).filter(Boolean))];
+      const aprovacoesPorNum = new Map();   // numero -> [linhas]
+      const usuariosCods = new Set();
+      const BATCH = 500;
+      for (let i = 0; i < numeros.length; i += BATCH) {
+        const slice = numeros.slice(i, i + BATCH);
+        const inClause = slice.map((_, k) => `@n${k}`).join(',');
+        const p = {};
+        slice.forEach((n, k) => { p[`n${k}`] = n; });
+        try {
+          const aprs = await Protheus.connectAndQuery(
+            `SELECT RTRIM(CR_NUM)     numero,
+                    RTRIM(CR_NIVEL)   nivel,
+                    RTRIM(CR_USER)    aprovador,
+                    RTRIM(CR_USERLIB) liberadoPor,
+                    CR_DATALIB        dataLib,
+                    RTRIM(CR_STATUS)  status,
+                    RTRIM(CR_GRUPO)   grupo,
+                    RTRIM(CR_APROV)   aprov,
+                    CR_TOTAL          total
+               FROM SCR010 WITH (NOLOCK)
+              WHERE D_E_L_E_T_ <> '*'
+                AND CR_FILIAL = '01'
+                AND CR_TIPO = 'SC'
+                AND CR_NUM IN (${inClause})
+              ORDER BY CR_NUM, CR_NIVEL`,
+            p
+          );
+          aprs.forEach(a => {
+            const num = trim(a.numero);
+            if (!aprovacoesPorNum.has(num)) aprovacoesPorNum.set(num, []);
+            aprovacoesPorNum.get(num).push(a);
+            if (trim(a.aprovador))   usuariosCods.add(trim(a.aprovador));
+            if (trim(a.liberadoPor)) usuariosCods.add(trim(a.liberadoPor));
+          });
+        } catch (e) { console.warn('SC aprovacoes batch err:', e.message); }
+      }
+
+      // Busca nomes dos usuários
+      const nomesUsr = new Map();
+      const cods = [...usuariosCods];
+      if (cods.length > 0) {
+        try {
+          for (let i = 0; i < cods.length; i += BATCH) {
+            const slice = cods.slice(i, i + BATCH);
+            const inUsr = slice.map((_, k) => `@u${k}`).join(',');
+            const p = {};
+            slice.forEach((c, k) => { p[`u${k}`] = c; });
+            const usrs = await Protheus.connectAndQuery(
+              `SELECT RTRIM(USR_ID) id, RTRIM(USR_NOME) nome FROM SYS_USR WHERE USR_ID IN (${inUsr})`,
+              p
+            );
+            usrs.forEach(u => nomesUsr.set(trim(u.id), trim(u.nome)));
+          }
+        } catch (e) { console.warn('SC nomes usuarios err:', e.message); }
+      }
+
       const statusList = status ? String(status).split(',').map(s => s.trim()).filter(Boolean) : null;
 
       const dados = rows
@@ -101,6 +172,25 @@ module.exports = (app) => ({
             C1_PEDIDO: r.pedido,
             C1_RESIDUO: r.residuo
           });
+          const aprovacoes = (aprovacoesPorNum.get(trim(r.numero)) || []).map(a => {
+            const apvCod  = trim(a.aprovador);
+            const libCod  = trim(a.liberadoPor);
+            return {
+              nivel: trim(a.nivel),
+              aprovadorCod: apvCod,
+              aprovadorNome: nomesUsr.get(apvCod) || '',
+              liberadoPorCod: libCod,
+              liberadoPorNome: nomesUsr.get(libCod) || '',
+              dataLib: trim(a.dataLib),
+              status: decodeStatusAprovacao(a.status),
+              grupo: trim(a.grupo),
+              valor: toNumber(a.total)
+            };
+          });
+          // resumo: ultima liberacao + se ainda tem nivel pendente
+          const liberadas = aprovacoes.filter(a => a.status.codigo === 'LIBERADO');
+          const pendentes = aprovacoes.filter(a => a.status.codigo === 'PENDENTE');
+          const ultimaLib = liberadas.sort((a, b) => (b.dataLib || '').localeCompare(a.dataLib || ''))[0] || null;
           return {
             filial: r.filial,
             numero: r.numero,
@@ -126,7 +216,12 @@ module.exports = (app) => ({
             cotacao: r.cotacao,
             pedido: r.pedido,
             observacao: r.observacao,
-            status: st
+            status: st,
+            aprovacoes,
+            qtdAprovacoes: aprovacoes.length,
+            qtdLiberadas: liberadas.length,
+            qtdPendentes: pendentes.length,
+            ultimaAprovacao: ultimaLib
           };
         })
         .filter((r) => !statusList || statusList.includes(r.status.codigo));

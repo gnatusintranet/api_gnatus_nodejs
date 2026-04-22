@@ -1,0 +1,18 @@
+// Remove uma linha específica (um volume) do bordero
+module.exports = (app) => ({
+  verb: 'delete',
+  route: '/bordero/:id',
+
+  handler: async (req, res) => {
+    const { Mssql } = app.services;
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ message: 'ID inválido.' });
+    try {
+      await Mssql.connectAndQuery(`DELETE FROM TAB_EXP_BORDERO WHERE ID = @id`, { id });
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error('Erro expedicao/bordero-delete-linha:', err);
+      return res.status(500).json({ message: 'Erro ao remover linha.' });
+    }
+  }
+});

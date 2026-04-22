@@ -16,21 +16,42 @@ const CFOPS_VENDA = ['5105','5106','5116','5117','5119','5405','5933',
 
 const CFOPS_DEVOLUCAO = ['1202','2202','1411','2411','1553','2553'];
 
-// Classificação dos prefixos de natureza em linhas do DRE
+// Classificação dos prefixos de natureza em linhas do DRE.
+// IMPORTANTE: 201/202/203 (MP Nacional/Importada/Desembaraço) NÃO entram em
+// Despesas Operacionais — esses custos são absorvidos via CMV (D2_CUSTO1)
+// quando o PA correspondente é vendido. Somá-los aqui causaria double-counting.
+// Eles aparecem em uma seção separada "Compras de Insumos do Período" só pra
+// referência; não impactam EBIT/Lucro Líquido.
 const MAPA_DESPESAS = {
+  '204': { ordem: 1, label: 'Serviços Tomados' },
+  '205': { ordem: 2, label: 'Despesas com Pessoal' },
+  '206': { ordem: 3, label: 'Despesas Gerais' },
+  '207': { ordem: 4, label: 'Despesas Administrativas' },
+  '210': { ordem: 5, label: 'Investimentos' },
+  '212': { ordem: 6, label: 'Sócios' },
+  '213': { ordem: 7, label: 'Imobilizado/Consórcio' }
+};
+const MAPA_INSUMOS = {
   '201': { ordem: 1, label: 'Matéria-Prima Nacional' },
   '202': { ordem: 2, label: 'Matéria-Prima Importada' },
-  '203': { ordem: 3, label: 'Desembaraço Aduaneiro' },
-  '204': { ordem: 4, label: 'Serviços Tomados' },
-  '205': { ordem: 5, label: 'Despesas com Pessoal' },
-  '206': { ordem: 6, label: 'Despesas Gerais' },
-  '207': { ordem: 7, label: 'Despesas Administrativas' },
-  '210': { ordem: 8, label: 'Investimentos' },
-  '212': { ordem: 9, label: 'Sócios' },
-  '213': { ordem: 10, label: 'Imobilizado/Consórcio' }
+  '203': { ordem: 3, label: 'Desembaraço Aduaneiro' }
 };
 const GRUPO_FINANCEIRO = '211';
 const GRUPO_IMPOSTOS   = '208';
+
+// Classificação heurística da natureza 211 (Financeiro). Como a Gnatus não
+// subdivide a natureza no Protheus (tudo cai em 21101), inferimos pelo
+// histórico do título. Auditoria mostrou que ~44% é amortização de
+// financiamento (não vai pro DRE), ~2% juros reais e ~54% sem padrão claro.
+const RX_AMORTIZACAO = /AMORTIZ|FINIMP|PRINCIPAL|INVOICE|RECOMPRA/i;
+const RX_JUROS_REAL  = /JUROS|IOF|TAXA|TARIFA|CUSTAS|MULTA|MORA|CORRETAGEM/i;
+
+const classificar211 = (historico) => {
+  const h = String(historico || '');
+  if (RX_AMORTIZACAO.test(h)) return 'AMORTIZACAO';
+  if (RX_JUROS_REAL.test(h))  return 'JUROS';
+  return 'PENDENTE';
+};
 
 const toN = (v) => Number(v || 0);
 const trim = (v) => String(v || '').trim();
@@ -150,10 +171,66 @@ module.exports = (app) => ({
       `;
       const despesasRows = await Protheus.connectAndQuery(sqlDespesas, { filial, inicio, fim });
 
+      // ---------- 3.1) Detalhes da natureza 211 (Financeiro) — classifica
+      // título a título por palavras-chave do histórico.
+      // Heurística necessária porque a Gnatus tem só 21101 cadastrada (mistura
+      // amortização de empréstimos com juros reais). Auditoria gerada na rota
+      // /gerencia/dre/auditoria-211 lista cada lançamento para a contabilidade
+      // reclassificar no Protheus.
+      const sql211 = `
+        SELECT RTRIM(se2.E2_NATUREZ) natureza,
+               RTRIM(se2.E2_PREFIXO) prefixo,
+               RTRIM(se2.E2_NUM)     numero,
+               RTRIM(se2.E2_PARCELA) parcela,
+               RTRIM(se2.E2_TIPO)    tipoTitulo,
+               RTRIM(se2.E2_FORNECE) fornCod,
+               RTRIM(se2.E2_LOJA)    fornLoja,
+               RTRIM(se2.E2_NOMFOR)  fornNome,
+               RTRIM(se2.E2_HIST)    historico,
+               se2.E2_EMISSAO        emissao,
+               se2.E2_VENCTO         vencimento,
+               se2.E2_VALOR          valor
+          FROM SE2010 se2 WITH (NOLOCK)
+         WHERE se2.D_E_L_E_T_ <> '*'
+           AND se2.E2_FILIAL = @filial
+           AND se2.E2_EMISSAO BETWEEN @inicio AND @fim
+           AND LEFT(RTRIM(se2.E2_NATUREZ), 3) = '${GRUPO_FINANCEIRO}'
+         ORDER BY se2.E2_VALOR DESC
+      `;
+      const titulos211 = await Protheus.connectAndQuery(sql211, { filial, inicio, fim });
+
+      const fin211 = { juros: { total: 0, qtd: 0, lancamentos: [] },
+                       amortizacao: { total: 0, qtd: 0, lancamentos: [] },
+                       pendente:    { total: 0, qtd: 0, lancamentos: [] } };
+      titulos211.forEach(r => {
+        const valor = toN(r.valor);
+        if (valor === 0) return;
+        const cls = classificar211(r.historico);
+        const bucket = cls === 'AMORTIZACAO' ? fin211.amortizacao
+                     : cls === 'JUROS'       ? fin211.juros
+                     :                         fin211.pendente;
+        bucket.total += valor;
+        bucket.qtd   += 1;
+        bucket.lancamentos.push({
+          natureza: trim(r.natureza),
+          prefixo: trim(r.prefixo),
+          numero: trim(r.numero),
+          parcela: trim(r.parcela),
+          tipoTitulo: trim(r.tipoTitulo),
+          fornCod: trim(r.fornCod),
+          fornLoja: trim(r.fornLoja),
+          fornNome: trim(r.fornNome),
+          historico: trim(r.historico),
+          emissao: trim(r.emissao),
+          vencimento: trim(r.vencimento),
+          valor,
+          classificacao: cls
+        });
+      });
+
       // Agrupa por prefixo de 3 chars (natureza-pai)
-      const gruposDespesas = {};      // { '201': { label, total, naturezas: [] } }
-      let totalFinanceiro = 0;        // prefixo 211
-      const detalhesFinanceiro = [];
+      const gruposDespesas = {};      // despesas operacionais (entram em EBIT)
+      const gruposInsumos  = {};      // 201/202/203 — informativo, NÃO entram em EBIT
       let totalImpostos = 0;          // prefixo 208
       const detalhesImpostos = [];
       const outrasDespesas = [];      // naturezas que não entram em nenhum grupo
@@ -167,14 +244,28 @@ module.exports = (app) => ({
 
         const pref = cod.slice(0, 3);
 
-        if (pref === GRUPO_FINANCEIRO) {
-          totalFinanceiro += valor;
-          detalhesFinanceiro.push({ natureza: cod, descricao, qtd, valor });
-          return;
-        }
+        // 211 (Financeiro) já foi tratado em sql211 acima — pula
+        if (pref === GRUPO_FINANCEIRO) return;
+
         if (pref === GRUPO_IMPOSTOS) {
           totalImpostos += valor;
           detalhesImpostos.push({ natureza: cod, descricao, qtd, valor });
+          return;
+        }
+
+        // 201/202/203 são compras de insumos — agrupar separado e NÃO somar em EBIT
+        if (MAPA_INSUMOS[pref]) {
+          if (!gruposInsumos[pref]) {
+            gruposInsumos[pref] = {
+              codigo: pref,
+              label: MAPA_INSUMOS[pref].label,
+              ordem: MAPA_INSUMOS[pref].ordem,
+              total: 0,
+              naturezas: []
+            };
+          }
+          gruposInsumos[pref].total += valor;
+          gruposInsumos[pref].naturezas.push({ natureza: cod, descricao, qtd, valor });
           return;
         }
 
@@ -196,15 +287,20 @@ module.exports = (app) => ({
       });
 
       const gruposArr = Object.values(gruposDespesas).sort((a, b) => a.ordem - b.ordem);
+      const insumosArr = Object.values(gruposInsumos).sort((a, b) => a.ordem - b.ordem);
       const totalDespesasOp = gruposArr.reduce((s, g) => s + g.total, 0);
+      const totalInsumos    = insumosArr.reduce((s, g) => s + g.total, 0);
       const totalOutras = outrasDespesas.reduce((s, n) => s + n.valor, 0);
 
       // ---------- 4) Consolidação DRE ----------
+      // Apenas JUROS confirmados entram no Resultado Financeiro do DRE.
+      // Amortização e Pendente saem como informativo (não impactam Lucro Líquido).
       const totalDeducoes = devolucoes.total + icms + pis + cofins + ipi;
       const receitaLiquida = receitaBruta.total - totalDeducoes;
       const lucroBruto = receitaLiquida - cmv;
       const ebit = lucroBruto - totalDespesasOp;
-      const lucroLiquido = ebit - totalFinanceiro - totalImpostos - totalOutras;
+      const totalFinanceiroReal = fin211.juros.total;
+      const lucroLiquido = ebit - totalFinanceiroReal - totalImpostos - totalOutras;
 
       const pct = (v) => (receitaLiquida > 0 ? (v / receitaLiquida) * 100 : 0);
 
@@ -232,12 +328,38 @@ module.exports = (app) => ({
           grupos: gruposArr
         },
 
+        comprasInsumos: {
+          total: totalInsumos,
+          grupos: insumosArr,
+          aviso: 'Informativo. Não impacta EBIT/Lucro Líquido — esses custos são absorvidos via CMV quando o produto correspondente é vendido.'
+        },
+
         ebit,
         margemOperacional: pct(ebit),
 
-        resultadoFinanceiro: { total: totalFinanceiro, detalhes: detalhesFinanceiro },
-        impostosRecolher:    { total: totalImpostos,   detalhes: detalhesImpostos },
-        outrasDespesas:      { total: totalOutras,     naturezas: outrasDespesas },
+        // Apenas juros/IOF/taxas confirmados — entram no Lucro Líquido
+        resultadoFinanceiro: {
+          total: fin211.juros.total,
+          qtd: fin211.juros.qtd,
+          aviso: 'Apenas lançamentos com histórico contendo JUROS, IOF, TAXA, TARIFA, CUSTAS, MULTA, MORA ou CORRETAGEM.'
+        },
+
+        // Informativo: amortização de financiamento (não vai pro DRE)
+        amortizacaoFinanciamento: {
+          total: fin211.amortizacao.total,
+          qtd: fin211.amortizacao.qtd,
+          aviso: 'Amortização de empréstimos / FINIMP / faturas de importação. NÃO impacta EBIT/Lucro Líquido — é redução de passivo, não despesa.'
+        },
+
+        // Informativo: lançamentos sem padrão claro pra contabilidade reclassificar
+        pendenteClassificacao: {
+          total: fin211.pendente.total,
+          qtd: fin211.pendente.qtd,
+          aviso: 'Lançamentos da natureza 211 sem palavra-chave reconhecível. Solicitar à contabilidade que reclassifique no Protheus criando subnaturezas (21102 Amortização, 21103 IOF, 21104 Importação, etc).'
+        },
+
+        impostosRecolher: { total: totalImpostos, detalhes: detalhesImpostos },
+        outrasDespesas:   { total: totalOutras, naturezas: outrasDespesas },
 
         lucroLiquido,
         margemLiquida: pct(lucroLiquido),
