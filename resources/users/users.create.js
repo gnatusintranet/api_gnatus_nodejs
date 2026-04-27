@@ -29,11 +29,18 @@ module.exports = (app) => ({
 
     try {
       const existente = await Pg.connectAndQuery(
-        `SELECT ID FROM tab_intranet_usr WHERE EMAIL = @email`,
+        `SELECT ID, ATIVO FROM tab_intranet_usr WHERE EMAIL = @email`,
         { email }
       );
       if (existente.length > 0) {
-        return res.status(409).json({ message: 'Já existe um usuário com este e-mail.' });
+        const inativo = !existente[0].ATIVO;
+        return res.status(409).json({
+          message: inativo
+            ? `Já existe usuário com este e-mail (atualmente DESATIVADO). Localize-o na lista e clique em "Ativar".`
+            : `Já existe um usuário ativo com este e-mail.`,
+          existeId: existente[0].ID,
+          existeAtivo: !inativo
+        });
       }
 
       const senhaHash = bcrypt.hashSync(String(senha), 10);

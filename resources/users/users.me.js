@@ -18,6 +18,11 @@ module.exports = (app) => ({
 
       const mapPermissions = permissoes.map(p => p.ID_PERMISSAO);
 
+      // Sem cache HTTP — sempre devolve perms atualizadas (impede continuar com perm revogada)
+      res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.set('Pragma', 'no-cache');
+      res.set('Expires', '0');
+
       return res.json({
         id: ID,
         matricula: MATRICULA,
