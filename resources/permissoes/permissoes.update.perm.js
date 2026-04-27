@@ -30,8 +30,8 @@ module.exports = app => ({
     try {
       await Pg.connectAndQuery(
         `UPDATE tab_intranet_permissoes
-         SET [ID_PERMISSAO] = @idPermissao, [NOME] = @nome, [MODULO] = @modulo
-         WHERE [ID] = @id`,
+         SET id_permissao = @idPermissao, nome = @nome, modulo = @modulo
+         WHERE id = @id`,
         { id, idPermissao, nome: permissao.NOME, modulo: permissao.MODULO }
       );
       return res.status(200).json({ message: 'Permissão atualizada com sucesso' });

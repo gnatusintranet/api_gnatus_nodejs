@@ -1,32 +1,30 @@
 module.exports = app => ({
     verb: 'get',
     route: '/permissoes/:ID_USER',
- 
+
     handler: async (req, res) => {
- 
-        const { ID_USER } = req.params;
-        const id = Number(ID_USER);
+        const id = Number(req.params.ID_USER);
+        if (!id || isNaN(id)) return res.status(400).json({ message: 'ID inválido.' });
 
-         
         const { Pg } = app.services;
-         try {
-      const data = await Pg.connectAndQuery(`
-        SELECT
-           P.ID
-          ,P.ID_PERMISSAO
-          ,P.NOME
-          ,P.MODULO
-          ,ASSIGNED = CASE WHEN UP.ID_PERMISSAO IS NULL THEN 0 ELSE 1 END
-        FROM tab_intranet_permissoes AS P WITH (NOLOCK)
-        LEFT JOIN tab_intranet_usr_permissoes AS UP WITH (NOLOCK)
-          ON UP.ID_PERMISSAO = P.ID_PERMISSAO
-         AND UP.ID_USER = ${id}
-        ORDER BY P.MODULO, P.NOME
-      `);
+        try {
+            const data = await Pg.connectAndQuery(`
+                SELECT P.id,
+                       P.id_permissao,
+                       P.nome,
+                       P.modulo,
+                       CASE WHEN UP.id_permissao IS NULL THEN 0 ELSE 1 END AS assigned
+                  FROM tab_intranet_permissoes P
+                  LEFT JOIN tab_intranet_usr_permissoes UP
+                    ON UP.id_permissao = P.id_permissao
+                   AND UP.id_user = @id
+                 ORDER BY P.modulo, P.nome
+            `, { id });
 
-      return res.json(data);
-    } catch (error) {
-      return res.status(500).json({ message: error.message });
+            return res.json(data);
+        } catch (error) {
+            console.error('Erro listar permissoes do user:', error);
+            return res.status(500).json({ message: error.message });
+        }
     }
-  }
 });

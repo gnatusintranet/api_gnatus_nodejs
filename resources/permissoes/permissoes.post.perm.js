@@ -1,60 +1,31 @@
+// Cria uma nova permissão
 module.exports = app => ({
   verb: 'post',
   route: '/add/permissao',
 
   handler: async (req, res) => {
     const { Pg } = app.services;
-    const newPerm = req.body || {};
+    const { ID_PERMISSAO, NOME, MODULO } = req.body || {};
 
-    const norm = v =>
-      (v === undefined || v === null)
-        ? ''
-        : String(v).replace(/'/g, "''");
-
-    if (!newPerm.ID_PERMISSAO
-      || !newPerm.NOME
-      || !newPerm.MODULO
-    ) {
-      return res.status(400).json({ message: 'Ocorreu um erro ao criar permissão. Tente novamente mais tarde.' });
+    if (!ID_PERMISSAO || !NOME || !MODULO) {
+      return res.status(400).json({ message: 'ID_PERMISSAO, NOME e MODULO são obrigatórios.' });
     }
 
     try {
-      const query = `
-        BEGIN TRANSACTION;
-
-        INSERT INTO tab_intranet_permissoes
-        (
-          ID_PERMISSAO,
-          NOME,
-          MODULO
-        )
-        VALUES
-        (
-          ${newPerm.ID_PERMISSAO},
-          '${norm(newPerm.NOME)}',
-          '${norm(newPerm.MODULO)}'
-        );
-
-        DECLARE @NEW_ID INT = SCOPE_IDENTITY();
-
-        COMMIT TRANSACTION;
-
-        SELECT @NEW_ID AS ID;
-      `;
-
-      const result = await Pg.connectAndQuery(query);
-
-      const idnewPerm =
-        Array.isArray(result) && result.length > 0 && result[0].ID
-          ? result[0].ID
-          : (result?.recordset?.[0]?.ID ?? null);
-
-      return res.status(201).json({
-        message: 'Permissão criada com sucesso!',
-        id: idnewPerm
-      });
-
+      const result = await Pg.connectAndQuery(
+        `INSERT INTO tab_intranet_permissoes (id_permissao, nome, modulo)
+         VALUES (@idPerm, @nome, @modulo)
+         ON CONFLICT (id_permissao) DO NOTHING
+         RETURNING id`,
+        { idPerm: Number(ID_PERMISSAO), nome: String(NOME), modulo: String(MODULO) }
+      );
+      const id = result[0]?.id || null;
+      if (!id) {
+        return res.status(409).json({ message: `Permissão ${ID_PERMISSAO} já existe.` });
+      }
+      return res.status(201).json({ message: 'Permissão criada com sucesso!', id });
     } catch (error) {
+      console.error('Erro criar permissão:', error);
       return res.status(500).json({ message: error.message });
     }
   }
