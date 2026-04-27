@@ -10,7 +10,11 @@ module.exports = app => ({
     const idPerm = Number(ID_PERMISSAO);
     const assigned = Number(ASSIGNED);
 
-    if (!idUser || !idPerm || !MATRICULA || (assigned !== 0 && assigned !== 1)) {
+    // OBS: idPerm pode ser 0 (perm "Administrador acesso total"), por isso
+    // não usamos `!idPerm` — usamos checagem explícita de NaN/negativo.
+    if (!Number.isInteger(idUser) || idUser <= 0 ||
+        !Number.isInteger(idPerm) || idPerm < 0 ||
+        !MATRICULA || (assigned !== 0 && assigned !== 1)) {
       return res.status(400).json({ message: 'Parâmetros inválidos.' });
     }
 
