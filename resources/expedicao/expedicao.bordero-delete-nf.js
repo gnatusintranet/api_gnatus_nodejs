@@ -6,12 +6,12 @@ module.exports = (app) => ({
   route: '/bordero/nf/:nfe',
 
   handler: async (req, res) => {
-    const { Mssql } = app.services;
+    const { Pg } = app.services;
     const nfe = trim(req.params.nfe).toUpperCase();
     if (!nfe) return res.status(400).json({ message: 'NFe é obrigatória.' });
     try {
-      await Mssql.connectAndQuery(
-        `DELETE FROM TAB_EXP_BORDERO WHERE NOTAFISCAL = @nfe`, { nfe }
+      await Pg.connectAndQuery(
+        `DELETE FROM tab_exp_bordero WHERE NOTAFISCAL = @nfe`, { nfe }
       );
       return res.json({ ok: true });
     } catch (err) {

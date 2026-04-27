@@ -8,7 +8,7 @@ module.exports = (app) => ({
   route: '/reset-password',
 
   handler: async (req, res) => {
-    const { Mssql } = app.services;
+    const { Pg } = app.services;
     const user = req.user && req.user[0];
     if (!user) return res.status(401).json({ message: 'Usuário não autenticado.' });
 
@@ -18,29 +18,28 @@ module.exports = (app) => ({
     }
 
     try {
-      await Mssql.connectAndQuery(
-        `UPDATE TAB_INTRANET_USR
-         SET COFRE_SALT = @salt,
-             COFRE_ITERATIONS = @iterations,
-             COFRE_VERIFIER = @verifier,
-             COFRE_MK_ENC_PASS = @mkEncPass,
-             COFRE_MK_ENC_RECOVERY = @mkEncRecovery
-         WHERE ID = @id`,
+      await Pg.connectAndQuery(
+        `UPDATE tab_intranet_usr
+            SET cofre_salt            = @salt,
+                cofre_iterations      = @iterations,
+                cofre_verifier        = @verifier,
+                cofre_mk_enc_pass     = @mkEncPass,
+                cofre_mk_enc_recovery = @mkEncRecovery
+          WHERE id = @id`,
         { id: user.ID, salt, iterations, verifier, mkEncPass, mkEncRecovery }
       );
 
-      // Se a recovery key foi fornecida, re-sincroniza o backup
+      // Se a recovery key foi fornecida, re-sincroniza o backup (DELETE+INSERT)
       if (recoveryKey) {
         const encData = backup.encrypt(recoveryKey);
         const hashRk = backup.hash(recoveryKey);
-        await Mssql.connectAndQuery(
-          `MERGE TAB_SYS_AUDIT_META AS target
-           USING (SELECT @ref AS META_REF) AS source
-           ON (target.META_REF = source.META_REF)
-           WHEN MATCHED THEN
-             UPDATE SET META_DATA = @data, META_HASH = @hash, META_UPDATED = GETDATE()
-           WHEN NOT MATCHED THEN
-             INSERT (META_REF, META_HASH, META_DATA) VALUES (@ref, @hash, @data);`,
+        await Pg.connectAndQuery(
+          `DELETE FROM tab_sys_audit_meta WHERE meta_ref = @ref`,
+          { ref: user.ID }
+        );
+        await Pg.connectAndQuery(
+          `INSERT INTO tab_sys_audit_meta (meta_ref, meta_hash, meta_data)
+           VALUES (@ref, @hash, @data)`,
           { ref: user.ID, data: encData, hash: hashRk }
         );
       }

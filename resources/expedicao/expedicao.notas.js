@@ -1,7 +1,7 @@
 // Notas fiscais a expedir: SF2010 ainda não expedidas (z1_expedic IS NULL),
 // filial 01, série 1, emissão após 2020-03-01, exclui CFOPs que não entram
 // na expedição física (5118/6118/5119/6119/5934/5905/5922/6922).
-// Enriquece com flag `noBordero` consultando TAB_EXP_BORDERO da Intranet.
+// Enriquece com flag `noBordero` consultando tab_exp_bordero da Intranet.
 
 const trim = (v) => String(v || '').trim();
 const toN  = (v) => Number(v || 0);
@@ -11,7 +11,7 @@ module.exports = (app) => ({
   route: '/notas',
 
   handler: async (req, res) => {
-    const { Protheus, Mssql } = app.services;
+    const { Protheus, Pg } = app.services;
     const dataMinima = trim(req.query.dataMinima) || '20200301';
     const busca = trim(req.query.busca).toUpperCase();
 
@@ -75,8 +75,8 @@ module.exports = (app) => ({
       // Coleta as NFs que já estão no bordero
       const nfsNoBordero = new Set();
       try {
-        const borderoRows = await Mssql.connectAndQuery(
-          `SELECT DISTINCT NOTAFISCAL FROM TAB_EXP_BORDERO`, {}
+        const borderoRows = await Pg.connectAndQuery(
+          `SELECT DISTINCT NOTAFISCAL FROM tab_exp_bordero`, {}
         );
         borderoRows.forEach(r => nfsNoBordero.add(trim(r.NOTAFISCAL)));
       } catch (e) { console.warn('Expedição/notas: falha ao ler bordero', e.message); }

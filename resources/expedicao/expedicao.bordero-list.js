@@ -6,12 +6,12 @@ module.exports = (app) => ({
   route: '/bordero',
 
   handler: async (req, res) => {
-    const { Mssql } = app.services;
+    const { Pg } = app.services;
     try {
-      const rows = await Mssql.connectAndQuery(
+      const rows = await Pg.connectAndQuery(
         `SELECT ID, NOTAFISCAL, SERIE, DESTINATARIO, ENDERECO, CIDADE, CEP,
                 TRANSPORTADORA, VOLUMES, CRIADO_EM
-           FROM TAB_EXP_BORDERO
+           FROM tab_exp_bordero
           ORDER BY NOTAFISCAL, VOLUMES`,
         {}
       );

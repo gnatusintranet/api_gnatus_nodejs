@@ -4,6 +4,22 @@
 const trim = (v) => String(v || '').trim();
 const toNumber = (v) => Number(v || 0);
 
+// E1_FORMAPG não tem cBox nem mapeamento em SX5. Mapping abaixo é a
+// interpretação mais comum no Protheus + cruzamento com tipo do título.
+// Ajustar caso a TI/Financeiro confirme outras descrições.
+const FORMAS_PGTO = {
+  '1': 'Dinheiro',
+  '2': 'Cheque',
+  '3': 'Cartão',
+  '4': 'Boleto Bancário',
+  '5': 'Outros',
+  '6': 'PIX',
+  'A': 'Cartão Débito',
+  'B': 'Crédito em Conta',
+  '':  'Não informado'
+};
+const descreverFormaPgto = (cod) => FORMAS_PGTO[cod] || `Forma ${cod}`;
+
 const faixaAtraso = (dias) => {
   if (dias <= 15)  return { codigo: 'A_6_15',    label: '6-15 dias',  cor: '#f5a500' };
   if (dias <= 30)  return { codigo: 'A_16_30',   label: '16-30 dias', cor: '#e55a1a' };
@@ -17,8 +33,8 @@ module.exports = (app) => ({
   route: '/painel',
 
   handler: async (req, res) => {
-    const { Protheus, Mssql } = app.services;
-    const { cliente, uf, faixa } = req.query;
+    const { Protheus, Pg } = app.services;
+    const { cliente, uf, faixa, bu, formaPgto } = req.query;
     const diasMinimos = Number(req.query.diasMinimos || 5);
 
     const params = { diasMinimos };
@@ -30,6 +46,14 @@ module.exports = (app) => ({
     if (uf) {
       params.uf = String(uf).toUpperCase();
       conds.push(`AND RTRIM(sa1.A1_EST) = @uf`);
+    }
+    if (bu) {
+      params.bu = String(bu).toUpperCase();
+      conds.push(`AND RTRIM(sc5.C5_ZTIPO) = @bu`);
+    }
+    if (formaPgto) {
+      params.formaPgto = String(formaPgto);
+      conds.push(`AND RTRIM(se1.E1_FORMAPG) = @formaPgto`);
     }
 
     const sql = `
@@ -55,6 +79,10 @@ module.exports = (app) => ({
         se1.E1_SALDO          AS saldo,
         RTRIM(se1.E1_NATUREZ) AS natureza,
         RTRIM(se1.E1_HIST)    AS historico,
+        RTRIM(se1.E1_PEDIDO)  AS pedido,
+        RTRIM(se1.E1_FORMAPG) AS formaPgto,
+        RTRIM(sc5.C5_ZTIPO)   AS buCod,
+        RTRIM(buNome.X5_DESCRI) AS buNome,
         DATEDIFF(day, CONVERT(date, se1.E1_VENCREA, 112), GETDATE()) AS diasAtraso
       FROM SE1010 se1 WITH (NOLOCK)
       LEFT JOIN SA1010 sa1 WITH (NOLOCK)
@@ -63,6 +91,14 @@ module.exports = (app) => ({
        AND sa1.D_E_L_E_T_ <> '*'
       LEFT JOIN SA3010 sa3 WITH (NOLOCK)
         ON sa3.A3_COD = sa1.A1_VEND AND sa3.D_E_L_E_T_ <> '*'
+      LEFT JOIN SC5010 sc5 WITH (NOLOCK)
+        ON sc5.C5_FILIAL = se1.E1_FILIAL
+       AND sc5.C5_NUM    = se1.E1_PEDIDO
+       AND sc5.D_E_L_E_T_ <> '*'
+      LEFT JOIN SX5010 buNome WITH (NOLOCK)
+        ON RTRIM(buNome.X5_TABELA) = 'Z1'
+       AND RTRIM(buNome.X5_CHAVE)  = RTRIM(sc5.C5_ZTIPO)
+       AND buNome.D_E_L_E_T_ <> '*'
       WHERE se1.D_E_L_E_T_ <> '*'
         AND se1.E1_SALDO > 0
         AND (se1.E1_BAIXA = '' OR se1.E1_BAIXA IS NULL)
@@ -99,6 +135,11 @@ module.exports = (app) => ({
           saldo: toNumber(r.saldo),
           natureza: trim(r.natureza),
           historico: trim(r.historico),
+          pedido: trim(r.pedido),
+          formaPgto: trim(r.formaPgto),
+          formaPgtoNome: descreverFormaPgto(trim(r.formaPgto)),
+          buCod: trim(r.buCod),
+          buNome: trim(r.buNome) || trim(r.buCod) || '(sem BU)',
           diasAtraso: dias,
           faixa: faixaAtraso(dias)
         };
@@ -114,19 +155,19 @@ module.exports = (app) => ({
       let ultimaAcaoMap = new Map();
       if (clienteKeys.length > 0) {
         try {
-          const statusRows = await Mssql.connectAndQuery(
+          const statusRows = await Pg.connectAndQuery(
             `SELECT CLIENTE_COD, CLIENTE_LOJA, STATUS, OBSERVACAO, DT_ATUALIZACAO
-               FROM TAB_COBRANCA_STATUS_CLIENTE`,
+               FROM tab_cobranca_status_cliente`,
             {}
           );
           statusRows.forEach(s => statusMap.set(`${trim(s.CLIENTE_COD)}|${trim(s.CLIENTE_LOJA)}`, {
             status: trim(s.STATUS), observacao: s.OBSERVACAO, dt: s.DT_ATUALIZACAO
           }));
 
-          const acoesRows = await Mssql.connectAndQuery(
+          const acoesRows = await Pg.connectAndQuery(
             `SELECT CLIENTE_COD, CLIENTE_LOJA, TIPO_ACAO, RESULTADO, DATA_PROMESSA, VALOR_PROMETIDO, CRIADO_EM,
                     ROW_NUMBER() OVER (PARTITION BY CLIENTE_COD, CLIENTE_LOJA ORDER BY CRIADO_EM DESC) rn
-               FROM TAB_COBRANCA_ACAO`,
+               FROM tab_cobranca_acao`,
             {}
           );
           acoesRows.filter(a => a.rn === 1).forEach(a => ultimaAcaoMap.set(`${trim(a.CLIENTE_COD)}|${trim(a.CLIENTE_LOJA)}`, {
@@ -184,12 +225,30 @@ module.exports = (app) => ({
         porFaixa[f].valor += t.saldo;
       });
 
+      // Listas distintas para popular os filtros de BU e Forma de Pgto.
+      // Usamos `titulos` (sem aplicar `bu`/`formaPgto` no SQL) para que o
+      // usuário sempre veja as opções disponíveis no universo carregado.
+      const busSet = new Map();      // cod -> nome
+      const formasSet = new Map();   // cod -> qtd
+      titulos.forEach(t => {
+        if (t.buCod) busSet.set(t.buCod, t.buNome || t.buCod);
+        if (t.formaPgto) formasSet.set(t.formaPgto, (formasSet.get(t.formaPgto) || 0) + 1);
+      });
+      const busDisponiveis = [...busSet.entries()]
+        .map(([cod, nome]) => ({ cod, nome }))
+        .sort((a, b) => a.nome.localeCompare(b.nome));
+      const formasPgtoDisponiveis = [...formasSet.entries()]
+        .map(([cod, qtd]) => ({ cod, nome: descreverFormaPgto(cod), qtd }))
+        .sort((a, b) => a.nome.localeCompare(b.nome));
+
       return res.json({
         diasMinimos,
         totalRegistros: filtrados.length,
         qtdClientes,
         totalGeral,
         porFaixa,
+        busDisponiveis,
+        formasPgtoDisponiveis,
         geradoEm: new Date().toISOString(),
         titulos: filtrados,
         porCliente

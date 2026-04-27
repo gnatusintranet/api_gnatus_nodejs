@@ -1,0 +1,57 @@
+-- Aprovações de SCs/PCs do Protheus integradas à Intranet
+-- - Coluna CODIGO_PROTHEUS no usuário (mapeia pra SYS_USR.USR_ID)
+-- - Permissão 13001 atribuída automaticamente quando usuário tem código preenchido
+--   E código aparece em SAL010 como aprovador
+-- - Log local de cada ação para auditoria (independente da resposta do Protheus)
+
+USE Intranet;
+GO
+
+-- 1) Coluna CODIGO_PROTHEUS no usuário
+IF NOT EXISTS (
+  SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+   WHERE TABLE_NAME = 'TAB_INTRANET_USR'
+     AND COLUMN_NAME = 'CODIGO_PROTHEUS'
+)
+BEGIN
+  ALTER TABLE dbo.TAB_INTRANET_USR ADD CODIGO_PROTHEUS VARCHAR(6) NULL;
+  PRINT '  -> Coluna CODIGO_PROTHEUS adicionada em TAB_INTRANET_USR.';
+END
+ELSE PRINT '  -> Coluna CODIGO_PROTHEUS ja existe.';
+GO
+
+-- 2) Tabela de log de aprovação (auditoria local)
+IF OBJECT_ID('dbo.TAB_APROVACAO_LOG','U') IS NULL
+BEGIN
+  CREATE TABLE dbo.TAB_APROVACAO_LOG (
+    ID                INT IDENTITY(1,1) PRIMARY KEY,
+    ID_USER           INT          NOT NULL,
+    CODIGO_PROTHEUS   VARCHAR(6)   NOT NULL,
+    TIPO_DOC          VARCHAR(2)   NOT NULL,    -- 'SC' ou 'PC'
+    NUMERO_DOC        VARCHAR(20)  NOT NULL,
+    ACAO              VARCHAR(20)  NOT NULL,    -- 'APROVAR' | 'REJEITAR'
+    JUSTIFICATIVA     NVARCHAR(MAX) NULL,
+    SUCESSO           BIT          NOT NULL,
+    RESPOSTA_PROTHEUS NVARCHAR(MAX) NULL,
+    IP_ORIGEM         VARCHAR(50)  NULL,
+    CRIADO_EM         DATETIME     NOT NULL CONSTRAINT DF_APR_LOG_DT DEFAULT (GETDATE()),
+    CONSTRAINT FK_APR_LOG_USR FOREIGN KEY (ID_USER) REFERENCES dbo.TAB_INTRANET_USR(ID)
+  );
+  CREATE INDEX IX_APR_LOG_USR ON dbo.TAB_APROVACAO_LOG (ID_USER, CRIADO_EM DESC);
+  CREATE INDEX IX_APR_LOG_DOC ON dbo.TAB_APROVACAO_LOG (TIPO_DOC, NUMERO_DOC);
+  PRINT '  -> TAB_APROVACAO_LOG criada.';
+END
+ELSE PRINT '  -> TAB_APROVACAO_LOG ja existe.';
+GO
+
+-- 3) Permissao do modulo
+IF NOT EXISTS (SELECT 1 FROM dbo.TAB_INTRANET_PERMISSOES WHERE ID_PERMISSAO = 13001)
+  INSERT INTO dbo.TAB_INTRANET_PERMISSOES (ID_PERMISSAO, NOME, MODULO)
+  VALUES (13001, 'Compras - Aprovador (SC/PC)', 'Compras');
+
+DECLARE @u INT; SELECT @u = ID FROM dbo.TAB_INTRANET_USR WHERE EMAIL = 'admin@gnatus.com.br';
+IF @u IS NOT NULL AND NOT EXISTS (SELECT 1 FROM dbo.TAB_INTRANET_USR_PERMISSOES WHERE ID_USER=@u AND ID_PERMISSAO=13001)
+  INSERT INTO dbo.TAB_INTRANET_USR_PERMISSOES (ID_USER, ID_PERMISSAO, MATRICULA) VALUES (@u, 13001, 'ADM001');
+GO
+
+PRINT 'Setup aprovacoes: concluido.';

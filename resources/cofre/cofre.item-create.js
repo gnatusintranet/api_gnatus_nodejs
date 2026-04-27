@@ -3,7 +3,7 @@ module.exports = (app) => ({
   route: '/items',
 
   handler: async (req, res) => {
-    const { Mssql } = app.services;
+    const { Pg } = app.services;
     const user = req.user && req.user[0];
     if (!user) return res.status(401).json({ message: 'Usuário não autenticado.' });
 
@@ -13,10 +13,10 @@ module.exports = (app) => ({
     }
 
     try {
-      const result = await Mssql.connectAndQuery(
-        `INSERT INTO TAB_COFRE_ITEM (ID_USER, TITULO, CATEGORIA, URL, USUARIO_ENC, SENHA_ENC, NOTAS_ENC)
-         OUTPUT INSERTED.ID
-         VALUES (@id, @titulo, @categoria, @url, @usuarioEnc, @senhaEnc, @notasEnc)`,
+      const result = await Pg.connectAndQuery(
+        `INSERT INTO tab_cofre_item (id_user, titulo, categoria, url, usuario_enc, senha_enc, notas_enc)
+         VALUES (@id, @titulo, @categoria, @url, @usuarioEnc, @senhaEnc, @notasEnc)
+         RETURNING id`,
         {
           id: user.ID,
           titulo,
@@ -27,7 +27,7 @@ module.exports = (app) => ({
           notasEnc: notasEnc || ''
         }
       );
-      return res.status(201).json({ ok: true, id: result[0]?.ID });
+      return res.status(201).json({ ok: true, id: result[0]?.id });
     } catch (err) {
       console.error('Erro cofre/items-create:', err);
       return res.status(500).json({ message: 'Erro ao criar item.' });

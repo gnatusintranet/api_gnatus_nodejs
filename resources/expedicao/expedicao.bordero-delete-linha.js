@@ -4,11 +4,11 @@ module.exports = (app) => ({
   route: '/bordero/:id',
 
   handler: async (req, res) => {
-    const { Mssql } = app.services;
+    const { Pg } = app.services;
     const id = Number(req.params.id);
     if (!id) return res.status(400).json({ message: 'ID inválido.' });
     try {
-      await Mssql.connectAndQuery(`DELETE FROM TAB_EXP_BORDERO WHERE ID = @id`, { id });
+      await Pg.connectAndQuery(`DELETE FROM tab_exp_bordero WHERE ID = @id`, { id });
       return res.json({ ok: true });
     } catch (err) {
       console.error('Erro expedicao/bordero-delete-linha:', err);

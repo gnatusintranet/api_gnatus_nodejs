@@ -7,7 +7,7 @@ module.exports = (app) => ({
   route: '/acao',
 
   handler: async (req, res) => {
-    const { Mssql } = app.services;
+    const { Pg } = app.services;
     const user = req.user && req.user[0];
     if (!user) return res.status(401).json({ message: 'Usuário não autenticado.' });
 
@@ -22,12 +22,12 @@ module.exports = (app) => ({
     if (!RESULTADOS.includes(resultado)) return res.status(400).json({ message: 'Resultado inválido.' });
 
     try {
-      const result = await Mssql.connectAndQuery(
-        `INSERT INTO TAB_COBRANCA_ACAO
-           (CLIENTE_COD, CLIENTE_LOJA, TITULO_PREFIXO, TITULO_NUM, TITULO_PARCELA, TITULO_TIPO,
-            TIPO_ACAO, RESULTADO, DATA_PROMESSA, VALOR_PROMETIDO, DESCRICAO, ID_USER)
-         OUTPUT INSERTED.ID
-         VALUES (@cod, @loja, @pref, @num, @parc, @tt, @tipo, @res, @dp, @vp, @desc, @uid)`,
+      const result = await Pg.connectAndQuery(
+        `INSERT INTO tab_cobranca_acao
+           (cliente_cod, cliente_loja, titulo_prefixo, titulo_num, titulo_parcela, titulo_tipo,
+            tipo_acao, resultado, data_promessa, valor_prometido, descricao, id_user)
+         VALUES (@cod, @loja, @pref, @num, @parc, @tt, @tipo, @res, @dp, @vp, @desc, @uid)
+         RETURNING id`,
         {
           cod: String(clienteCod).trim(), loja: String(clienteLoja).trim(),
           pref: String(tituloPrefixo || '').trim(), num: String(tituloNum || '').trim(),
@@ -39,7 +39,7 @@ module.exports = (app) => ({
           uid: user.ID
         }
       );
-      return res.status(201).json({ ok: true, id: result[0]?.ID });
+      return res.status(201).json({ ok: true, id: result[0]?.id });
     } catch (err) {
       console.error('Erro cobranca/acao-create:', err);
       return res.status(500).json({ message: 'Erro ao registrar ação.' });

@@ -1,5 +1,5 @@
 module.exports = (app) => {
-  let { Jwt, Mysql, Mssql } = app.services;
+  let { Jwt, Mysql, Pg } = app.services;
 
   return async (req, res, next) => {
     try {
@@ -20,8 +20,8 @@ module.exports = (app) => {
 
       // Buscar o usuário com base no tipo de token
       if (decoded.type == "usuario") {
-        req.user = await Mssql.connectAndQuery(
-          `select * from TAB_INTRANET_USR WHERE ID = @id and ATIVO = 1`,
+        req.user = await Pg.connectAndQuery(
+          `select * from tab_intranet_usr WHERE ID = @id and ativo = true`,
           { id: decoded.id }
         );
       } else if (decoded.type == "motorista") {
@@ -37,8 +37,8 @@ module.exports = (app) => {
         );
       } else if (decoded.type == "franqueado") {
         // console.log(req.user)
-        req.user = await Mssql.connectAndQuery(
-          `SELECT * FROM TAB_INTRANET_USR_FRANQUEADO WHERE ID = @id AND ATIVO = 1`,
+        req.user = await Pg.connectAndQuery(
+          `SELECT * FROM tab_intranet_usr_franqueado WHERE ID = @id AND ativo = true`,
           { id: decoded.id }
         );
       }

@@ -4,7 +4,7 @@ module.exports = (app) => ({
   route: '/comentario',
 
   handler: async (req, res) => {
-    const { Mssql } = app.services;
+    const { Pg } = app.services;
     const user = req.user && req.user[0];
     if (!user) return res.status(401).json({ message: 'Usuário não autenticado.' });
 
@@ -13,10 +13,10 @@ module.exports = (app) => ({
     if (!texto || !String(texto).trim()) return res.status(400).json({ message: 'Texto do comentário é obrigatório.' });
 
     try {
-      const result = await Mssql.connectAndQuery(
-        `INSERT INTO TAB_COBRANCA_COMENTARIO (CLIENTE_COD, CLIENTE_LOJA, ID_USER, TEXTO)
-         OUTPUT INSERTED.ID, INSERTED.CRIADO_EM
-         VALUES (@cod, @loja, @uid, @texto)`,
+      const result = await Pg.connectAndQuery(
+        `INSERT INTO tab_cobranca_comentario (cliente_cod, cliente_loja, id_user, texto)
+         VALUES (@cod, @loja, @uid, @texto)
+         RETURNING id, criado_em`,
         {
           cod: String(clienteCod).trim(),
           loja: String(clienteLoja).trim(),
@@ -26,8 +26,8 @@ module.exports = (app) => ({
       );
       return res.status(201).json({
         ok: true,
-        id: result[0]?.ID,
-        criadoEm: result[0]?.CRIADO_EM,
+        id: result[0]?.id,
+        criadoEm: result[0]?.criado_em,
         userNome: user.NOME
       });
     } catch (err) {

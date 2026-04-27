@@ -6,14 +6,14 @@ module.exports = (app) => ({
   route: '/recovery-blob',
 
   handler: async (req, res) => {
-    const { Mssql } = app.services;
+    const { Pg } = app.services;
     const user = req.user && req.user[0];
     if (!user) return res.status(401).json({ message: 'Usuário não autenticado.' });
 
     try {
-      const rows = await Mssql.connectAndQuery(
+      const rows = await Pg.connectAndQuery(
         `SELECT COFRE_SALT, COFRE_ITERATIONS, COFRE_MK_ENC_RECOVERY
-         FROM TAB_INTRANET_USR WHERE ID = @id`,
+         FROM tab_intranet_usr WHERE ID = @id`,
         { id: user.ID }
       );
       const r = rows[0] || {};

@@ -3,7 +3,7 @@ module.exports = app => ({
   route: "/edit/:ID",
 
   handler: async (req, res) => {
-    const { Mssql } = app.services;
+    const { Pg } = app.services;
     const { ID } = req.params;
     const permissao = req.body || {};
 
@@ -28,8 +28,8 @@ module.exports = app => ({
     }
 
     try {
-      await Mssql.connectAndQuery(
-        `UPDATE TAB_INTRANET_PERMISSOES
+      await Pg.connectAndQuery(
+        `UPDATE tab_intranet_permissoes
          SET [ID_PERMISSAO] = @idPermissao, [NOME] = @nome, [MODULO] = @modulo
          WHERE [ID] = @id`,
         { id, idPermissao, nome: permissao.NOME, modulo: permissao.MODULO }

@@ -8,7 +8,7 @@ module.exports = (app) => ({
   route: '/minhas-acoes',
 
   handler: async (req, res) => {
-    const { Mssql, Protheus } = app.services;
+    const { Pg, Protheus } = app.services;
     const user = req.user && req.user[0];
     if (!user) return res.status(401).json({ message: 'Usuário não autenticado.' });
 
@@ -19,7 +19,7 @@ module.exports = (app) => ({
         SELECT a.ID, a.CLIENTE_COD, a.CLIENTE_LOJA,
                a.TIPO_ACAO, a.RESULTADO, a.DATA_PROMESSA, a.VALOR_PROMETIDO,
                a.DESCRICAO, a.CRIADO_EM, a.TITULO_NUM, a.TITULO_PARCELA
-          FROM TAB_COBRANCA_ACAO a
+          FROM tab_cobranca_acao a
          WHERE a.ID_USER = @uid`;
       if (scope === 'pendentes') {
         sql += ` AND a.DATA_PROMESSA IS NOT NULL
@@ -27,7 +27,7 @@ module.exports = (app) => ({
       }
       sql += ` ORDER BY COALESCE(a.DATA_PROMESSA, a.CRIADO_EM) ASC`;
 
-      const rows = await Mssql.connectAndQuery(sql, { uid: user.ID });
+      const rows = await Pg.connectAndQuery(sql, { uid: user.ID });
       if (!rows.length) return res.json({ acoes: [] });
 
       // Enriquece com nome do cliente via Protheus

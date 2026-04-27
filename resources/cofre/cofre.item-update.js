@@ -3,7 +3,7 @@ module.exports = (app) => ({
   route: '/items/:id/update',
 
   handler: async (req, res) => {
-    const { Mssql } = app.services;
+    const { Pg } = app.services;
     const user = req.user && req.user[0];
     if (!user) return res.status(401).json({ message: 'Usuário não autenticado.' });
 
@@ -16,8 +16,8 @@ module.exports = (app) => ({
     }
 
     try {
-      await Mssql.connectAndQuery(
-        `UPDATE TAB_COFRE_ITEM
+      await Pg.connectAndQuery(
+        `UPDATE tab_cofre_item
          SET TITULO = @titulo, CATEGORIA = @categoria, URL = @url,
              USUARIO_ENC = @usuarioEnc, SENHA_ENC = @senhaEnc, NOTAS_ENC = @notasEnc,
              UPDATED_AT = GETDATE()

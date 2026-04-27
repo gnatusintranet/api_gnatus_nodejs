@@ -8,14 +8,14 @@ module.exports = (app) => ({
     route: '/enviar-codigo-reset',
     anonymous: true,
     handler: async (req, res) => {
-      const { Mssql } = app.services;
+      const { Pg } = app.services;
       const { email } = req.body;
       if (!email) return res.status(400).json({ message: 'Email é obrigatório' });
 
       try {
-        // CORREÇÃO: Usando Mssql.connectAndQuery diretamente
-        const userResult = await Mssql.connectAndQuery(
-          `SELECT ID FROM TAB_INTRANET_USR WHERE EMAIL = @email`,
+        // CORREÇÃO: Usando Pg.connectAndQuery diretamente
+        const userResult = await Pg.connectAndQuery(
+          `SELECT ID FROM tab_intranet_usr WHERE EMAIL = @email`,
           { email }
         );
 
@@ -26,15 +26,17 @@ module.exports = (app) => ({
         const codigo = generateVerificationCode();
         const expireDate = new Date(Date.now() + 15 * 60 * 1000);
 
-        await Mssql.connectAndQuery(`
-          MERGE TAB_VERIFICACAO_INTRANET AS target
-          USING (SELECT @email AS Email) AS source
-          ON (target.Email = source.Email)
-          WHEN MATCHED THEN
-            UPDATE SET Codigo = @codigo, DataExpiracao = @dataExpiracao
-          WHEN NOT MATCHED THEN
-            INSERT (Email, Codigo, DataExpiracao) VALUES (@email, @codigo, @dataExpiracao);
-        `, { email, codigo, dataExpiracao: expireDate });
+        // Postgres não tem MERGE assim — apaga código anterior e insere novo
+        // (PK é composta por email+codigo, mas a lógica de negócio é "1 ativo por email")
+        await Pg.connectAndQuery(
+          `DELETE FROM tab_verificacao_intranet WHERE email = @email`,
+          { email }
+        );
+        await Pg.connectAndQuery(
+          `INSERT INTO tab_verificacao_intranet (email, codigo, data_expiracao)
+           VALUES (@email, @codigo, @dataExpiracao)`,
+          { email, codigo, dataExpiracao: expireDate }
+        );
         
         await sendVerificationEmail(email, codigo);
         return res.json({ message: 'Código enviado para o seu e-mail.' });

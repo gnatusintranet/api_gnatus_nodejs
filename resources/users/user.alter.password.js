@@ -6,15 +6,15 @@ module.exports = (app) => ({
   //anonymous: true,
 
   handler: async (req, res) => {
-    const { Mssql } = app.services;
+    const { Pg } = app.services;
 
     const { SENHA } = req.body;
 
     try {
       const { NOME, MATRICULA } = req.user[0];
 
-      await Mssql.connectAndQuery(
-        `UPDATE TAB_INTRANET_USR SET SENHA = @senha WHERE MATRICULA = @matricula`,
+      await Pg.connectAndQuery(
+        `UPDATE tab_intranet_usr SET SENHA = @senha WHERE MATRICULA = @matricula`,
         { senha: bcrypt.hashSync(SENHA, 10), matricula: MATRICULA }
       );
 

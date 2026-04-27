@@ -3,7 +3,7 @@ module.exports = app => ({
   route: '/nomeUser',
   //anonymous: true,
   handler: async (req, res) => {
-    const { Mssql } = app.services;
+    const { Pg } = app.services;
 
     if (!req.user || !Array.isArray(req.user) || req.user.length === 0) {
         console.error("Erro: req.user não está no formato esperado:", req.user);
@@ -17,11 +17,11 @@ module.exports = app => ({
 
         const sql = `
             SELECT NOME, MATRICULA
-            FROM TAB_INTRANET_USR
-            WHERE ATIVO = 1 AND ID = @id
+            FROM tab_intranet_usr
+            WHERE ativo = true AND ID = @id
         `;
 
-        const data = await Mssql.connectAndQuery(sql, { id: userId });
+        const data = await Pg.connectAndQuery(sql, { id: userId });
       
         if (data && data.length > 0) {
             return res.json(data[0]);

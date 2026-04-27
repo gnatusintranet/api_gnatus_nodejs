@@ -3,7 +3,7 @@ module.exports = app => ({
   route: '/add/permissao',
 
   handler: async (req, res) => {
-    const { Mssql } = app.services;
+    const { Pg } = app.services;
     const newPerm = req.body || {};
 
     const norm = v =>
@@ -22,7 +22,7 @@ module.exports = app => ({
       const query = `
         BEGIN TRANSACTION;
 
-        INSERT INTO TAB_INTRANET_PERMISSOES
+        INSERT INTO tab_intranet_permissoes
         (
           ID_PERMISSAO,
           NOME,
@@ -42,7 +42,7 @@ module.exports = app => ({
         SELECT @NEW_ID AS ID;
       `;
 
-      const result = await Mssql.connectAndQuery(query);
+      const result = await Pg.connectAndQuery(query);
 
       const idnewPerm =
         Array.isArray(result) && result.length > 0 && result[0].ID

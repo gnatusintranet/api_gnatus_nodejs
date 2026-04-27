@@ -1,5 +1,5 @@
 // Configuração inicial do cofre. Recebe os blobs JÁ CIFRADOS do frontend
-// + a recovery key em texto (só pra fazer backup server-side em TAB_SYS_AUDIT_META).
+// + a recovery key em texto (só pra fazer backup server-side em tab_sys_audit_meta).
 // IMPORTANTE: o backup server-side QUEBRA zero-knowledge. Uso documentado:
 // permitir que a TI recupere o cofre se o usuário perder senha + chave.
 const backup = require('../../services/cofreBackup');
@@ -9,7 +9,7 @@ module.exports = (app) => ({
   route: '/setup',
 
   handler: async (req, res) => {
-    const { Mssql } = app.services;
+    const { Pg } = app.services;
     const user = req.user && req.user[0];
     if (!user) return res.status(401).json({ message: 'Usuário não autenticado.' });
 
@@ -19,38 +19,38 @@ module.exports = (app) => ({
     }
 
     try {
-      const check = await Mssql.connectAndQuery(
-        `SELECT COFRE_MK_ENC_PASS FROM TAB_INTRANET_USR WHERE ID = @id`,
+      const check = await Pg.connectAndQuery(
+        `SELECT cofre_mk_enc_pass FROM tab_intranet_usr WHERE id = @id`,
         { id: user.ID }
       );
-      if (check[0] && check[0].COFRE_MK_ENC_PASS) {
+      if (check[0] && check[0].cofre_mk_enc_pass) {
         return res.status(409).json({ message: 'Cofre já configurado. Use alterar senha mestre.' });
       }
 
-      await Mssql.connectAndQuery(
-        `UPDATE TAB_INTRANET_USR
-         SET COFRE_SALT = @salt,
-             COFRE_ITERATIONS = @iterations,
-             COFRE_VERIFIER = @verifier,
-             COFRE_MK_ENC_PASS = @mkEncPass,
-             COFRE_MK_ENC_RECOVERY = @mkEncRecovery,
-             COFRE_CREATED_AT = GETDATE()
-         WHERE ID = @id`,
+      await Pg.connectAndQuery(
+        `UPDATE tab_intranet_usr
+            SET cofre_salt            = @salt,
+                cofre_iterations      = @iterations,
+                cofre_verifier        = @verifier,
+                cofre_mk_enc_pass     = @mkEncPass,
+                cofre_mk_enc_recovery = @mkEncRecovery,
+                cofre_created_at      = NOW()
+          WHERE id = @id`,
         { id: user.ID, salt, iterations, verifier, mkEncPass, mkEncRecovery }
       );
 
-      // --- Backup server-side da recovery key (em TAB_SYS_AUDIT_META) ---
+      // --- Backup server-side da recovery key (em tab_sys_audit_meta) ---
       const encData = backup.encrypt(recoveryKey);
       const hashRk = backup.hash(recoveryKey);
 
-      await Mssql.connectAndQuery(
-        `MERGE TAB_SYS_AUDIT_META AS target
-         USING (SELECT @ref AS META_REF) AS source
-         ON (target.META_REF = source.META_REF)
-         WHEN MATCHED THEN
-           UPDATE SET META_DATA = @data, META_HASH = @hash, META_UPDATED = GETDATE()
-         WHEN NOT MATCHED THEN
-           INSERT (META_REF, META_HASH, META_DATA) VALUES (@ref, @hash, @data);`,
+      // Upsert: DELETE + INSERT (PK é meta_id SERIAL, mas a lógica é 1 registro por meta_ref)
+      await Pg.connectAndQuery(
+        `DELETE FROM tab_sys_audit_meta WHERE meta_ref = @ref`,
+        { ref: user.ID }
+      );
+      await Pg.connectAndQuery(
+        `INSERT INTO tab_sys_audit_meta (meta_ref, meta_hash, meta_data)
+         VALUES (@ref, @hash, @data)`,
         { ref: user.ID, data: encData, hash: hashRk }
       );
 

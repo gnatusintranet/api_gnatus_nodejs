@@ -6,15 +6,15 @@ module.exports = (app) => ({
   anonymous: true,
 
   handler: async (req, res) => {
-    const { Mssql, Jwt } = app.services;
+    const { Pg, Jwt } = app.services;
 
     let { email, senha } = req.body;
 
-    const tableName = "TAB_INTRANET_USR"; 
+    const tableName = "tab_intranet_usr"; 
     const fields = ["ID", "NOME", "EMAIL", "SENHA", "ATIVO"]; 
 
     try {
-      const user = await getUserByEmail(Mssql, tableName, fields, email);
+      const user = await getUserByEmail(Pg, tableName, fields, email);
       
       if (!user)
         return res.status(400).json({ message: "Usuário não encontrado" });
@@ -39,14 +39,14 @@ module.exports = (app) => ({
 
 
 // Função para obter um usuário pelo email
-async function getUserByEmail(Mssql, tableName, fields, email) {
+async function getUserByEmail(Pg, tableName, fields, email) {
 
   const query = `SELECT ${fields.join(
     ", "
-  )} FROM ${tableName} WHERE EMAIL = @email AND ATIVO = 1`;
+  )} FROM ${tableName} WHERE EMAIL = @email AND ativo = true`;
 
   try {
-    const [user] = await Mssql.connectAndQuery(query, { email });
+    const [user] = await Pg.connectAndQuery(query, { email });
     //console.log(user)
     // if (!user) {
     //   throw new Error("Usuário não encontrado");

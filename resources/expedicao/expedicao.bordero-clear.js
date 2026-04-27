@@ -4,9 +4,9 @@ module.exports = (app) => ({
   route: '/bordero',
 
   handler: async (req, res) => {
-    const { Mssql } = app.services;
+    const { Pg } = app.services;
     try {
-      await Mssql.connectAndQuery(`DELETE FROM TAB_EXP_BORDERO`, {});
+      await Pg.connectAndQuery(`DELETE FROM tab_exp_bordero`, {});
       return res.json({ ok: true });
     } catch (err) {
       console.error('Erro expedicao/bordero-clear:', err);

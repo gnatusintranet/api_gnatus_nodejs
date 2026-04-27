@@ -1,5 +1,5 @@
 // Adiciona uma NF ao bordero: busca dados no Protheus e insere N linhas em
-// TAB_EXP_BORDERO, uma para cada volume (001/003, 002/003, 003/003...).
+// tab_exp_bordero, uma para cada volume (001/003, 002/003, 003/003...).
 const trim = (v) => String(v || '').trim();
 const toN  = (v) => Number(v || 0);
 
@@ -8,7 +8,7 @@ module.exports = (app) => ({
   route: '/bordero',
 
   handler: async (req, res) => {
-    const { Protheus, Mssql } = app.services;
+    const { Protheus, Pg } = app.services;
     const user = req.user && req.user[0];
     if (!user) return res.status(401).json({ message: 'Usuário não autenticado.' });
 
@@ -47,8 +47,8 @@ module.exports = (app) => ({
       const totalVolumes = Math.max(1, Math.round(toN(nf.volumes)));
 
       // Verifica se já está no bordero
-      const existe = await Mssql.connectAndQuery(
-        `SELECT TOP 1 ID FROM TAB_EXP_BORDERO WHERE NOTAFISCAL = @nfe`,
+      const existe = await Pg.connectAndQuery(
+        `SELECT id FROM tab_exp_bordero WHERE notafiscal = @nfe LIMIT 1`,
         { nfe: trim(nf.nfe) }
       );
       if (existe.length) return res.status(409).json({ message: 'NFe já está no bordero.' });
@@ -63,8 +63,8 @@ module.exports = (app) => ({
       const pad = (n) => String(n).padStart(3, '0');
       for (let i = 1; i <= totalVolumes; i++) {
         const volLabel = `${pad(i)}/${pad(totalVolumes)}`;
-        await Mssql.connectAndQuery(
-          `INSERT INTO TAB_EXP_BORDERO
+        await Pg.connectAndQuery(
+          `INSERT INTO tab_exp_bordero
              (NOTAFISCAL, SERIE, DESTINATARIO, ENDERECO, CIDADE, CEP, TRANSPORTADORA, VOLUMES, ID_USER)
            VALUES (@nfe, @serie, @dest, @end, @cid, @cep, @transp, @vol, @uid)`,
           {

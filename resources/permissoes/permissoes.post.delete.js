@@ -3,7 +3,7 @@ module.exports = app => ({
   route: "/delete/:ID",
 
  handler: async (req, res) => {
-    const { Mssql } = app.services;
+    const { Pg } = app.services;
     const { ID } = req.params;
 
     const id = parseInt(ID, 10);
@@ -12,8 +12,8 @@ module.exports = app => ({
     }
 
     try {
-      const result = await Mssql.connectAndQuery(
-        `DELETE FROM TAB_INTRANET_PERMISSOES WHERE ID = @id`,
+      const result = await Pg.connectAndQuery(
+        `DELETE FROM tab_intranet_permissoes WHERE ID = @id`,
         { id }
       );
       if (result && result.rowsAffected && result.rowsAffected[0] === 0) {

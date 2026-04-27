@@ -4,15 +4,15 @@ module.exports = (app) => ({
   route: '/items',
 
   handler: async (req, res) => {
-    const { Mssql } = app.services;
+    const { Pg } = app.services;
     const user = req.user && req.user[0];
     if (!user) return res.status(401).json({ message: 'Usuário não autenticado.' });
 
     try {
-      const rows = await Mssql.connectAndQuery(
+      const rows = await Pg.connectAndQuery(
         `SELECT ID, TITULO, CATEGORIA, URL, USUARIO_ENC, SENHA_ENC, NOTAS_ENC,
                 CREATED_AT, UPDATED_AT
-         FROM TAB_COFRE_ITEM
+         FROM tab_cofre_item
          WHERE ID_USER = @id
          ORDER BY TITULO`,
         { id: user.ID }

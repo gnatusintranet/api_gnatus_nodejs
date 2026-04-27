@@ -12,13 +12,13 @@ module.exports = (app) => ({
   route: '/admin/recovery',
 
   handler: async (req, res) => {
-    const { Mssql } = app.services;
+    const { Pg } = app.services;
     const reqUser = req.user && req.user[0];
     if (!reqUser) return res.status(401).json({ message: 'Usuário não autenticado.' });
 
     // Checa se o requester tem permissão admin (1026)
-    const perm = await Mssql.connectAndQuery(
-      `SELECT 1 AS ok FROM TAB_INTRANET_USR_PERMISSOES
+    const perm = await Pg.connectAndQuery(
+      `SELECT 1 AS ok FROM tab_intranet_usr_permissoes
        WHERE ID_USER = @id AND ID_PERMISSAO = 1026`,
       { id: reqUser.ID }
     );
@@ -33,18 +33,18 @@ module.exports = (app) => ({
 
     try {
       // Busca o usuário-alvo
-      const alvo = await Mssql.connectAndQuery(
+      const alvo = await Pg.connectAndQuery(
         `SELECT u.ID, u.NOME, u.EMAIL
-         FROM TAB_INTRANET_USR u WHERE u.EMAIL = @email AND u.ATIVO = 1`,
+         FROM tab_intranet_usr u WHERE u.EMAIL = @email AND u.ativo = true`,
         { email }
       );
       if (alvo.length === 0) return res.status(404).json({ message: 'Usuário não encontrado.' });
       const target = alvo[0];
 
       // Busca o backup
-      const meta = await Mssql.connectAndQuery(
+      const meta = await Pg.connectAndQuery(
         `SELECT META_ID, META_DATA, META_HASH, META_READ_COUNT
-         FROM TAB_SYS_AUDIT_META WHERE META_REF = @ref`,
+         FROM tab_sys_audit_meta WHERE META_REF = @ref`,
         { ref: target.ID }
       );
       if (meta.length === 0) {
@@ -54,8 +54,8 @@ module.exports = (app) => ({
       const recoveryKey = backup.decrypt(meta[0].META_DATA);
 
       // Atualiza contadores de auditoria
-      await Mssql.connectAndQuery(
-        `UPDATE TAB_SYS_AUDIT_META
+      await Pg.connectAndQuery(
+        `UPDATE tab_sys_audit_meta
          SET META_LAST_READ = GETDATE(),
              META_READ_COUNT = META_READ_COUNT + 1
          WHERE META_ID = @id`,

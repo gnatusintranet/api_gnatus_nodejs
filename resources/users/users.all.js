@@ -3,9 +3,9 @@ module.exports = app => ({
   route: '/all',
   //anonymous: true,
   handler: async (req, res) => {
-    const { Mssql } = app.services
+    const { Pg } = app.services
 
-    const data = await Mssql.connectAndQuery('SELECT * FROM TAB_INTRANET_USR WHERE ATIVO = 1')
+    const data = await Pg.connectAndQuery('SELECT * FROM tab_intranet_usr WHERE ativo = true')
     return res.json(data)
     
   }

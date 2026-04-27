@@ -3,7 +3,7 @@ module.exports = (app) => ({
   route: '/items/:id/delete',
 
   handler: async (req, res) => {
-    const { Mssql } = app.services;
+    const { Pg } = app.services;
     const user = req.user && req.user[0];
     if (!user) return res.status(401).json({ message: 'Usuário não autenticado.' });
 
@@ -11,8 +11,8 @@ module.exports = (app) => ({
     if (!id || isNaN(id)) return res.status(400).json({ message: 'ID inválido.' });
 
     try {
-      await Mssql.connectAndQuery(
-        `DELETE FROM TAB_COFRE_ITEM WHERE ID = @id AND ID_USER = @idUser`,
+      await Pg.connectAndQuery(
+        `DELETE FROM tab_cofre_item WHERE ID = @id AND ID_USER = @idUser`,
         { id, idUser: user.ID }
       );
       return res.json({ ok: true });

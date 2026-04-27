@@ -10,9 +10,14 @@
 //
 // Todas as queries filtram D_E_L_E_T_ <> '*' e F_FILIAL = '01' e usam (NOLOCK).
 
+// CFOPs de venda para reconhecimento de receita no DRE.
+// Base: lista oficial Gnatus (20 CFOPs SP+FORA usadas no relatório de faturamento)
+// + 5907/6907 (faturamento futuro — receita reconhecida) + 5924 (outras saídas).
+// Excluídos 5934 (remessa simbólica) e 5914 (retorno de remessa em consignação)
+// porque são operações simbólicas que não geram receita real.
 const CFOPS_VENDA = ['5105','5106','5116','5117','5119','5405','5933',
                      '6105','6106','6107','6108','6109','6110','6116','6117',
-                     '6119','6122','6123','6404','6933','5924','5907','5934','5914','6907'];
+                     '6119','6122','6123','6404','6933','5907','6907','5924'];
 
 const CFOPS_DEVOLUCAO = ['1202','2202','1411','2411','1553','2553'];
 

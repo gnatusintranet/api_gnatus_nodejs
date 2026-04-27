@@ -3,3 +3,7 @@ node_modules
 .DS_Store
 .env
 .claude/
+# Backups da migracao MSSQL -> Postgres (nao versionar)
+*.mssql.bak
+# Debug helpers temporarios
+debug_*.js

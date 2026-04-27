@@ -19,7 +19,7 @@ module.exports = (app) => ({
   route: '/cliente/:cod/:loja',
 
   handler: async (req, res) => {
-    const { Protheus, Mssql } = app.services;
+    const { Protheus, Pg } = app.services;
     const cod  = String(req.params.cod  || '').trim();
     const loja = String(req.params.loja || '').trim();
     if (!cod || !loja) return res.status(400).json({ message: 'Código e loja do cliente são obrigatórios.' });
@@ -76,32 +76,32 @@ module.exports = (app) => ({
       });
 
       // 3) Ações registradas (histórico)
-      const acoes = await Mssql.connectAndQuery(
+      const acoes = await Pg.connectAndQuery(
         `SELECT a.ID, a.TITULO_PREFIXO, a.TITULO_NUM, a.TITULO_PARCELA, a.TITULO_TIPO,
                 a.TIPO_ACAO, a.RESULTADO, a.DATA_PROMESSA, a.VALOR_PROMETIDO, a.DESCRICAO,
                 a.CRIADO_EM, u.NOME AS USER_NOME
-           FROM TAB_COBRANCA_ACAO a
-           LEFT JOIN TAB_INTRANET_USR u ON u.ID = a.ID_USER
+           FROM tab_cobranca_acao a
+           LEFT JOIN tab_intranet_usr u ON u.ID = a.ID_USER
           WHERE a.CLIENTE_COD = @cod AND a.CLIENTE_LOJA = @loja
           ORDER BY a.CRIADO_EM DESC`,
         { cod, loja }
       );
 
       // 4) Comentários internos
-      const comentarios = await Mssql.connectAndQuery(
+      const comentarios = await Pg.connectAndQuery(
         `SELECT c.ID, c.TEXTO, c.CRIADO_EM, c.ID_USER, u.NOME AS USER_NOME
-           FROM TAB_COBRANCA_COMENTARIO c
-           LEFT JOIN TAB_INTRANET_USR u ON u.ID = c.ID_USER
+           FROM tab_cobranca_comentario c
+           LEFT JOIN tab_intranet_usr u ON u.ID = c.ID_USER
           WHERE c.CLIENTE_COD = @cod AND c.CLIENTE_LOJA = @loja
           ORDER BY c.CRIADO_EM DESC`,
         { cod, loja }
       );
 
       // 5) Status atual do cliente em cobrança
-      const sts = await Mssql.connectAndQuery(
+      const sts = await Pg.connectAndQuery(
         `SELECT s.STATUS, s.OBSERVACAO, s.DT_ATUALIZACAO, u.NOME AS USER_NOME
-           FROM TAB_COBRANCA_STATUS_CLIENTE s
-           LEFT JOIN TAB_INTRANET_USR u ON u.ID = s.ID_USER
+           FROM tab_cobranca_status_cliente s
+           LEFT JOIN tab_intranet_usr u ON u.ID = s.ID_USER
           WHERE s.CLIENTE_COD = @cod AND s.CLIENTE_LOJA = @loja`,
         { cod, loja }
       );

@@ -6,14 +6,14 @@ module.exports = (app) => ({
     route: '/redefinir-senha-com-codigo',
     anonymous: true,
     handler: async (req, res) => {
-        const { Mssql } = app.services;
+        const { Pg } = app.services;
         const { email, codigo, novaSenha } = req.body;
         if (!email || !codigo || !novaSenha) return res.status(400).json({ message: 'Todos os campos são obrigatórios' });
 
         try {
-            // CORREÇÃO: Usando Mssql.connectAndQuery diretamente
-            const codeResult = await Mssql.connectAndQuery(
-                `SELECT Codigo, DataExpiracao FROM TAB_VERIFICACAO_INTRANET WHERE Email = @email`,
+            // CORREÇÃO: Usando Pg.connectAndQuery diretamente
+            const codeResult = await Pg.connectAndQuery(
+                `SELECT Codigo, DataExpiracao FROM tab_verificacao_intranet WHERE Email = @email`,
                 { email }
             );
 
@@ -23,13 +23,13 @@ module.exports = (app) => ({
 
             const senhaHash = bcrypt.hashSync(novaSenha, 10);
 
-            await Mssql.connectAndQuery(
-                `UPDATE TAB_INTRANET_USR SET SENHA = @senha WHERE EMAIL = @email AND ATIVO = 1`,
+            await Pg.connectAndQuery(
+                `UPDATE tab_intranet_usr SET SENHA = @senha WHERE EMAIL = @email AND ativo = true`,
                 { senha: senhaHash, email }
             );
 
-            await Mssql.connectAndQuery(
-                `DELETE FROM TAB_VERIFICACAO_INTRANET WHERE Email = @email`,
+            await Pg.connectAndQuery(
+                `DELETE FROM tab_verificacao_intranet WHERE Email = @email`,
                 { email }
             );
 

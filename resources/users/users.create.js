@@ -5,8 +5,8 @@ module.exports = (app) => ({
   route: '/create',
 
   handler: async (req, res) => {
-    const { Mssql } = app.services;
-    const { nome, email, senha, matricula, ativo } = req.body || {};
+    const { Pg, Protheus } = app.services;
+    const { nome, email, senha, matricula, ativo, codigoProtheus, ramal } = req.body || {};
 
     if (!nome || !email || !senha || !matricula) {
       return res.status(400).json({ message: 'Nome, email, senha e matrícula são obrigatórios.' });
@@ -15,10 +15,21 @@ module.exports = (app) => ({
       return res.status(400).json({ message: 'A senha precisa ter pelo menos 6 caracteres.' });
     }
 
+    // Valida código Protheus se fornecido — deve existir em SYS_USR
+    const codProth = String(codigoProtheus || '').trim();
+    if (codProth) {
+      try {
+        const v = await Protheus.connectAndQuery(
+          `SELECT TOP 1 USR_ID FROM SYS_USR WHERE USR_ID = @cod`,
+          { cod: codProth }
+        );
+        if (!v.length) return res.status(400).json({ message: `Código Protheus '${codProth}' não encontrado em SYS_USR.` });
+      } catch (e) { console.warn('Não foi possível validar código Protheus:', e.message); }
+    }
+
     try {
-      // Checa e-mail duplicado
-      const existente = await Mssql.connectAndQuery(
-        `SELECT ID FROM TAB_INTRANET_USR WHERE EMAIL = @email`,
+      const existente = await Pg.connectAndQuery(
+        `SELECT ID FROM tab_intranet_usr WHERE EMAIL = @email`,
         { email }
       );
       if (existente.length > 0) {
@@ -26,16 +37,18 @@ module.exports = (app) => ({
       }
 
       const senhaHash = bcrypt.hashSync(String(senha), 10);
-      const ativoFlag = ativo === false ? 0 : 1;
+      const ativoFlag = ativo === false ? false : true;
 
-      const result = await Mssql.connectAndQuery(
-        `INSERT INTO TAB_INTRANET_USR (NOME, EMAIL, SENHA, MATRICULA, ATIVO)
-         OUTPUT INSERTED.ID
-         VALUES (@nome, @email, @senha, @matricula, @ativo)`,
-        { nome, email, senha: senhaHash, matricula, ativo: ativoFlag }
+      const ramalTrim = String(ramal || '').trim().slice(0, 8) || null;
+
+      const result = await Pg.connectAndQuery(
+        `INSERT INTO tab_intranet_usr (nome, email, senha, matricula, ativo, codigo_protheus, ramal)
+         VALUES (@nome, @email, @senha, @matricula, @ativo, @codProth, @ramal)
+         RETURNING id`,
+        { nome, email, senha: senhaHash, matricula, ativo: ativoFlag, codProth: codProth || null, ramal: ramalTrim }
       );
 
-      return res.status(201).json({ ok: true, id: result[0]?.ID });
+      return res.status(201).json({ ok: true, id: result[0]?.id });
     } catch (err) {
       console.error('Erro ao criar usuário:', err);
       return res.status(500).json({ message: 'Erro ao criar usuário.' });

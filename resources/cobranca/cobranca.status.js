@@ -6,7 +6,7 @@ module.exports = (app) => ({
   route: '/status/:cod/:loja',
 
   handler: async (req, res) => {
-    const { Mssql } = app.services;
+    const { Pg } = app.services;
     const user = req.user && req.user[0];
     if (!user) return res.status(401).json({ message: 'Usuário não autenticado.' });
 
@@ -18,13 +18,14 @@ module.exports = (app) => ({
     if (!STATUS_VALIDOS.includes(status)) return res.status(400).json({ message: 'Status inválido.' });
 
     try {
-      await Mssql.connectAndQuery(
-        `MERGE dbo.TAB_COBRANCA_STATUS_CLIENTE AS tgt
-         USING (SELECT @cod AS CLIENTE_COD, @loja AS CLIENTE_LOJA) AS src
-            ON tgt.CLIENTE_COD = src.CLIENTE_COD AND tgt.CLIENTE_LOJA = src.CLIENTE_LOJA
-         WHEN MATCHED THEN UPDATE SET STATUS = @status, OBSERVACAO = @obs, DT_ATUALIZACAO = GETDATE(), ID_USER = @uid
-         WHEN NOT MATCHED THEN INSERT (CLIENTE_COD, CLIENTE_LOJA, STATUS, OBSERVACAO, ID_USER)
-                               VALUES (@cod, @loja, @status, @obs, @uid);`,
+      await Pg.connectAndQuery(
+        `INSERT INTO tab_cobranca_status_cliente (cliente_cod, cliente_loja, status, observacao, id_user)
+         VALUES (@cod, @loja, @status, @obs, @uid)
+         ON CONFLICT (cliente_cod, cliente_loja) DO UPDATE
+            SET status         = EXCLUDED.status,
+                observacao     = EXCLUDED.observacao,
+                dt_atualizacao = NOW(),
+                id_user        = EXCLUDED.id_user`,
         { cod, loja, status, obs: observacao || null, uid: user.ID }
       );
       return res.json({ ok: true });

@@ -2,7 +2,7 @@ module.exports = app => ({
   verb: 'post',
   route: '/permissoes/toggle',
   handler: async (req, res) => {
-    const { Mssql } = app.services;
+    const { Pg } = app.services;
     const { ID_USER, ID_PERMISSAO, MATRICULA, ASSIGNED } = req.body;
 
     const idUser = Number(ID_USER);
@@ -19,23 +19,23 @@ module.exports = app => ({
         BEGIN
           IF NOT EXISTS (
             SELECT 1
-            FROM TAB_INTRANET_USR_PERMISSOES WITH (NOLOCK)
+            FROM tab_intranet_usr_permissoes WITH (NOLOCK)
             WHERE ID_USER = ${idUser} AND ID_PERMISSAO = ${idPerm} AND MATRICULA = @matricula
           )
           BEGIN
-            INSERT INTO TAB_INTRANET_USR_PERMISSOES (ID_USER, ID_PERMISSAO, MATRICULA)
+            INSERT INTO tab_intranet_usr_permissoes (ID_USER, ID_PERMISSAO, MATRICULA)
             VALUES (${idUser}, ${idPerm}, @matricula);
           END
         END
         ELSE
         BEGIN
-          DELETE FROM TAB_INTRANET_USR_PERMISSOES
+          DELETE FROM tab_intranet_usr_permissoes
           WHERE ID_USER = ${idUser} AND ID_PERMISSAO = ${idPerm} AND MATRICULA = @matricula;
         END
         COMMIT TRANSACTION;
       `;
 
-      await Mssql.connectAndQuery(query, { matricula: MATRICULA });
+      await Pg.connectAndQuery(query, { matricula: MATRICULA });
       return res.status(200).json({
         message: 'Permissões atualizada com sucesso.',
         ID_USER: idUser,

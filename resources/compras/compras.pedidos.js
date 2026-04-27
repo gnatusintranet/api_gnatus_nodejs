@@ -81,9 +81,11 @@ module.exports = (app) => ({
         RTRIM(sa2.A2_NOME)    AS fornecedorNome,
         RTRIM(sc7.C7_NUMSC)   AS origemSC,
         RTRIM(sc7.C7_ITEMSC)  AS origemSCItem,
+        RTRIM(sc7.C7_ZNUMPRO) AS origemProcesso,
         RTRIM(sc7.C7_CC)      AS centroCusto,
         RTRIM(sc7.C7_USER)    AS usuario,
         RTRIM(sc7.C7_COND)    AS condPag,
+        RTRIM(sc7.C7_GRUPCOM) AS grupoAprov,
         RTRIM(sc7.C7_CONAPRO) AS conapro,
         RTRIM(sc7.C7_RESIDUO) AS residuo,
         RTRIM(sc7.C7_ENCER)   AS encer,
@@ -142,6 +144,99 @@ module.exports = (app) => ({
         } catch (e) { console.warn('PC aprovacoes batch err:', e.message); }
       }
 
+      // Fallback: para PCs sem aprovação direta (alçada SCR foi desativada em
+      // 11/2025), busca a aprovação da SC de origem (C7_NUMSC ou C7_ZNUMPRO).
+      // Marca como 'SC origem' no drawer para ficar transparente.
+      const aprovacoesPorSc = new Map();   // scNum -> [lancamentos]
+      const scsOrigem = new Set();
+      rows.forEach(r => {
+        const num = trim(r.numero);
+        if (aprovacoesPorNum.has(num)) return; // já tem aprovação direta do PC
+        const sc = trim(r.origemSC) || trim(r.origemProcesso);
+        if (sc) scsOrigem.add(sc);
+      });
+      const scsArr = [...scsOrigem];
+      for (let i = 0; i < scsArr.length; i += BATCH) {
+        const slice = scsArr.slice(i, i + BATCH);
+        const inClause = slice.map((_, k) => `@s${k}`).join(',');
+        const p = {};
+        slice.forEach((n, k) => { p[`s${k}`] = n; });
+        try {
+          const aprs = await Protheus.connectAndQuery(
+            `SELECT RTRIM(CR_NUM)     numero,
+                    RTRIM(CR_NIVEL)   nivel,
+                    RTRIM(CR_USER)    aprovador,
+                    RTRIM(CR_USERLIB) liberadoPor,
+                    CR_DATALIB        dataLib,
+                    RTRIM(CR_STATUS)  status,
+                    RTRIM(CR_GRUPO)   grupo,
+                    RTRIM(CR_APROV)   aprov,
+                    CR_TOTAL          total
+               FROM SCR010 WITH (NOLOCK)
+              WHERE D_E_L_E_T_ <> '*'
+                AND CR_FILIAL = '01'
+                AND CR_TIPO = 'SC'
+                AND CR_NUM IN (${inClause})
+              ORDER BY CR_NUM, CR_NIVEL`,
+            p
+          );
+          aprs.forEach(a => {
+            const num = trim(a.numero);
+            if (!aprovacoesPorSc.has(num)) aprovacoesPorSc.set(num, []);
+            aprovacoesPorSc.get(num).push(a);
+            if (trim(a.aprovador))   usuariosCods.add(trim(a.aprovador));
+            if (trim(a.liberadoPor)) usuariosCods.add(trim(a.liberadoPor));
+          });
+        } catch (e) { console.warn('PC SC origem batch err:', e.message); }
+      }
+
+      // 3o fallback: SAL010 — quando o PC ainda não tem aprovações via SCR
+      // (próprio ou da SC), busca os aprovadores potenciais do grupo
+      // (C7_GRUPCOM). Não revela QUEM efetivamente aprovou (Protheus não
+      // grava após desativação do SCR), mas mostra a lista de quem PODE
+      // aprovar pelo cadastro de alçadas.
+      const aprovadoresPorGrupo = new Map(); // grupo -> [{ aprov, usr, nivel }]
+      const gruposNeed = new Set();
+      rows.forEach(r => {
+        const num = trim(r.numero);
+        if (aprovacoesPorNum.has(num)) return;
+        const sc = trim(r.origemSC) || trim(r.origemProcesso);
+        if (sc && aprovacoesPorSc.has(sc)) return;
+        const grupo = trim(r.grupoAprov);
+        if (grupo) gruposNeed.add(grupo);
+      });
+      const gruposArr = [...gruposNeed];
+      for (let i = 0; i < gruposArr.length; i += BATCH) {
+        const slice = gruposArr.slice(i, i + BATCH);
+        const inClause = slice.map((_, k) => `@g${k}`).join(',');
+        const p = {};
+        slice.forEach((g, k) => { p[`g${k}`] = g; });
+        try {
+          const sals = await Protheus.connectAndQuery(
+            `SELECT RTRIM(AL_COD)   grupo,
+                    RTRIM(AL_DESC)  descrGrupo,
+                    RTRIM(AL_ITEM)  item,
+                    RTRIM(AL_APROV) aprov,
+                    RTRIM(AL_USER)  usuario,
+                    RTRIM(AL_NIVEL) nivel,
+                    RTRIM(AL_DOCPC) docPc,
+                    RTRIM(AL_LIBAPR) libApr
+               FROM SAL010 WITH (NOLOCK)
+              WHERE D_E_L_E_T_ <> '*'
+                AND AL_FILIAL = '01'
+                AND AL_COD IN (${inClause})
+              ORDER BY AL_COD, AL_NIVEL, AL_ITEM`,
+            p
+          );
+          sals.forEach(s => {
+            const g = trim(s.grupo);
+            if (!aprovadoresPorGrupo.has(g)) aprovadoresPorGrupo.set(g, { descrGrupo: trim(s.descrGrupo), aprovadores: [] });
+            aprovadoresPorGrupo.get(g).aprovadores.push(s);
+            if (trim(s.usuario)) usuariosCods.add(trim(s.usuario));
+          });
+        } catch (e) { console.warn('PC SAL grupo batch err:', e.message); }
+      }
+
       const nomesUsr = new Map();
       const cods = [...usuariosCods];
       if (cods.length > 0) {
@@ -171,21 +266,56 @@ module.exports = (app) => ({
             C7_RESIDUO: r.residuo,
             C7_ENCER: r.encer
           });
-          const aprovacoes = (aprovacoesPorNum.get(trim(r.numero)) || []).map(a => {
-            const apvCod  = trim(a.aprovador);
-            const libCod  = trim(a.liberadoPor);
-            return {
+          // Cascata: 1) SCR direto do PC  →  2) SCR da SC origem  →  3) aprovadores potenciais via SAL do grupo
+          let rawAprs = aprovacoesPorNum.get(trim(r.numero)) || [];
+          let origemAprovacao = null;
+          let aprovacoes = [];
+          if (rawAprs.length > 0) {
+            aprovacoes = rawAprs.map(a => ({
               nivel: trim(a.nivel),
-              aprovadorCod: apvCod,
-              aprovadorNome: nomesUsr.get(apvCod) || '',
-              liberadoPorCod: libCod,
-              liberadoPorNome: nomesUsr.get(libCod) || '',
+              aprovadorCod: trim(a.aprovador),
+              aprovadorNome: nomesUsr.get(trim(a.aprovador)) || '',
+              liberadoPorCod: trim(a.liberadoPor),
+              liberadoPorNome: nomesUsr.get(trim(a.liberadoPor)) || '',
               dataLib: trim(a.dataLib),
               status: decodeStatusAprovacao(a.status),
               grupo: trim(a.grupo),
               valor: toNumber(a.total)
-            };
-          });
+            }));
+          } else {
+            const sc = trim(r.origemSC) || trim(r.origemProcesso);
+            if (sc && aprovacoesPorSc.has(sc)) {
+              origemAprovacao = { tipo: 'SC_ORIGEM', numero: sc };
+              aprovacoes = aprovacoesPorSc.get(sc).map(a => ({
+                nivel: trim(a.nivel),
+                aprovadorCod: trim(a.aprovador),
+                aprovadorNome: nomesUsr.get(trim(a.aprovador)) || '',
+                liberadoPorCod: trim(a.liberadoPor),
+                liberadoPorNome: nomesUsr.get(trim(a.liberadoPor)) || '',
+                dataLib: trim(a.dataLib),
+                status: decodeStatusAprovacao(a.status),
+                grupo: trim(a.grupo),
+                valor: toNumber(a.total)
+              }));
+            } else {
+              const grupo = trim(r.grupoAprov);
+              if (grupo && aprovadoresPorGrupo.has(grupo)) {
+                const g = aprovadoresPorGrupo.get(grupo);
+                origemAprovacao = { tipo: 'GRUPO_POTENCIAL', numero: grupo, descricao: g.descrGrupo };
+                aprovacoes = g.aprovadores.map(s => ({
+                  nivel: trim(s.nivel),
+                  aprovadorCod: trim(s.usuario),
+                  aprovadorNome: nomesUsr.get(trim(s.usuario)) || '',
+                  liberadoPorCod: '',
+                  liberadoPorNome: '',
+                  dataLib: '',
+                  status: { codigo: 'POTENCIAL', label: 'Potencial', cor: '#5b9bd5' },
+                  grupo: trim(s.grupo),
+                  valor: 0
+                }));
+              }
+            }
+          }
           const liberadas = aprovacoes.filter(a => a.status.codigo === 'LIBERADO');
           const pendentes = aprovacoes.filter(a => a.status.codigo === 'PENDENTE');
           const ultimaLib = liberadas.sort((a, b) => (b.dataLib || '').localeCompare(a.dataLib || ''))[0] || null;
@@ -219,7 +349,8 @@ module.exports = (app) => ({
             qtdAprovacoes: aprovacoes.length,
             qtdLiberadas: liberadas.length,
             qtdPendentes: pendentes.length,
-            ultimaAprovacao: ultimaLib
+            ultimaAprovacao: ultimaLib,
+            origemAprovacao
           };
         })
         .filter((r) => !statusList || statusList.includes(r.status.codigo));

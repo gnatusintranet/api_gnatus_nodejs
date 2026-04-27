@@ -1,0 +1,37 @@
+# Postgres local pra desenvolvimento e testar a migracao.
+#
+# Uso:
+#   cd database/postgres
+#   docker compose up -d
+#
+# Depois aplica o schema:
+#   docker exec -i intranet-pg psql -U intranet -d intranet < 01-schema.sql
+#
+# Migra dados do MSSQL local:
+#   node 02-migrate-data.js
+#
+# Para parar:  docker compose down
+# Para reset:  docker compose down -v   (apaga o volume - cuidado)
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: intranet-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: intranet
+      POSTGRES_USER: intranet
+      POSTGRES_PASSWORD: intranet_dev_2026
+      TZ: America/Sao_Paulo
+    ports:
+      - "5432:5432"
+    volumes:
+      - intranet_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U intranet -d intranet"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  intranet_pg_data:
