@@ -8,24 +8,27 @@ const toNumber = (v) => Number(v || 0);
 // interpretação mais comum no Protheus + cruzamento com tipo do título.
 // Ajustar caso a TI/Financeiro confirme outras descrições.
 const FORMAS_PGTO = {
-  '1': 'Dinheiro',
-  '2': 'Cheque',
+  '1': 'Cheque',
+  '2': 'Dinheiro',
   '3': 'Cartão',
   '4': 'Boleto Bancário',
-  '5': 'Outros',
-  '6': 'PIX',
-  'A': 'Cartão Débito',
-  'B': 'Crédito em Conta',
-  '':  'Não informado'
+  '5': 'Não informado',
+  '6': 'Financiamento',
+  '7': 'Cartão BNDS',
+  '8': 'Bonificação',
+  '9': 'Consignado',
+  'B': 'Antecipação Parcelada',
+  'A': 'Futuro Garantido',
+  '': 'Não informado'
 };
 const descreverFormaPgto = (cod) => FORMAS_PGTO[cod] || `Forma ${cod}`;
 
 const faixaAtraso = (dias) => {
-  if (dias <= 15)  return { codigo: 'A_6_15',    label: '6-15 dias',  cor: '#f5a500' };
-  if (dias <= 30)  return { codigo: 'A_16_30',   label: '16-30 dias', cor: '#e55a1a' };
-  if (dias <= 60)  return { codigo: 'A_31_60',   label: '31-60 dias', cor: '#c9302c' };
-  if (dias <= 90)  return { codigo: 'A_61_90',   label: '61-90 dias', cor: '#8a1f1b' };
-  return             { codigo: 'A_90_MAIS', label: '90+ dias',   cor: '#4a0e0e' };
+  if (dias <= 15) return { codigo: 'A_6_15', label: '6-15 dias', cor: '#f5a500' };
+  if (dias <= 30) return { codigo: 'A_16_30', label: '16-30 dias', cor: '#e55a1a' };
+  if (dias <= 60) return { codigo: 'A_31_60', label: '31-60 dias', cor: '#c9302c' };
+  if (dias <= 90) return { codigo: 'A_61_90', label: '61-90 dias', cor: '#8a1f1b' };
+  return { codigo: 'A_90_MAIS', label: '90+ dias', cor: '#4a0e0e' };
 };
 
 module.exports = (app) => ({
