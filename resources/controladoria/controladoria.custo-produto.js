@@ -27,12 +27,20 @@ module.exports = (app) => ({
 
     try {
       // 1) Dados do produto
+      // Custo médio vem de SB2 (estoque por armazém). Pegamos o maior CM1 entre
+      // armazéns da filial 01 — na prática todos costumam ter o mesmo valor.
       const prod = await Protheus.connectAndQuery(
-        `SELECT TOP 1 RTRIM(B1_COD) cod, RTRIM(B1_DESC) descricao, RTRIM(B1_TIPO) tipo,
-                RTRIM(B1_UM) um, B1_CUSTD custoPadrao, RTRIM(B1_POSIPI) ncm,
-                RTRIM(B1_GRUPO) grupo, RTRIM(B1_PROC) tipoProc
-           FROM SB1010 WITH (NOLOCK)
-          WHERE D_E_L_E_T_ <> '*' AND B1_COD = @produto`,
+        `SELECT TOP 1 RTRIM(sb1.B1_COD) cod, RTRIM(sb1.B1_DESC) descricao, RTRIM(sb1.B1_TIPO) tipo,
+                RTRIM(sb1.B1_UM) um, sb1.B1_CUSTD custoPadrao, ISNULL(cm.cm1, 0) custoMedio,
+                RTRIM(sb1.B1_POSIPI) ncm, RTRIM(sb1.B1_GRUPO) grupo, RTRIM(sb1.B1_PROC) tipoProc
+           FROM SB1010 sb1 WITH (NOLOCK)
+           LEFT JOIN (
+             SELECT RTRIM(B2_COD) cod, MAX(B2_CM1) cm1
+               FROM SB2010 WITH (NOLOCK)
+              WHERE D_E_L_E_T_ <> '*' AND B2_FILIAL = '01'
+              GROUP BY B2_COD
+           ) cm ON cm.cod = RTRIM(sb1.B1_COD)
+          WHERE sb1.D_E_L_E_T_ <> '*' AND sb1.B1_COD = @produto`,
         { produto }
       );
       if (!prod.length) return res.status(404).json({ message: 'Produto não encontrado.' });
@@ -61,10 +69,17 @@ module.exports = (app) => ({
                   RTRIM(sb1.B1_UM)    um,
                   sg1.G1_QUANT        qtd,
                   sg1.G1_PERDA        perda,
-                  sb1.B1_CUSTD        custoPadrao
+                  sb1.B1_CUSTD        custoPadrao,
+                  ISNULL(cm.cm1, 0)   custoMedio
              FROM SG1010 sg1 WITH (NOLOCK)
              LEFT JOIN SB1010 sb1 WITH (NOLOCK)
                ON sb1.B1_COD = sg1.G1_COMP AND sb1.D_E_L_E_T_ <> '*'
+             LEFT JOIN (
+               SELECT RTRIM(B2_COD) cod, MAX(B2_CM1) cm1
+                 FROM SB2010 WITH (NOLOCK)
+                WHERE D_E_L_E_T_ <> '*' AND B2_FILIAL = '01'
+                GROUP BY B2_COD
+             ) cm ON cm.cod = RTRIM(sg1.G1_COMP)
             WHERE sg1.D_E_L_E_T_ <> '*'
               AND sg1.G1_COD IN (${inCods})
               AND sg1.G1_INI <= @hoje AND sg1.G1_FIM >= @hoje
@@ -83,7 +98,8 @@ module.exports = (app) => ({
             um: trim(r.um),
             qtd: toN(r.qtd),
             perda: toN(r.perda),
-            custoPadrao: toN(r.custoPadrao)
+            custoPadrao: toN(r.custoPadrao),
+            custoMedio: toN(r.custoMedio)
           };
           porPai.get(pai).push(item);
           todosCods.add(item.componente);
@@ -101,8 +117,8 @@ module.exports = (app) => ({
         return res.json({
           produto: {
             cod: trim(p.cod), descricao: trim(p.descricao), tipo: trim(p.tipo),
-            um: trim(p.um), custoPadrao: toN(p.custoPadrao), ncm: trim(p.ncm),
-            grupo: trim(p.grupo), tipoProc: trim(p.tipoProc)
+            um: trim(p.um), custoPadrao: toN(p.custoPadrao), custoMedio: toN(p.custoMedio),
+            ncm: trim(p.ncm), grupo: trim(p.grupo), tipoProc: trim(p.tipoProc)
           },
           aviso: 'Produto não tem estrutura (SG1) válida cadastrada para hoje.',
           componentes: [],
@@ -276,6 +292,7 @@ module.exports = (app) => ({
             qtdComPerda: qtdEfetiva,
             qtdEfetivaNoPA: fator,
             custoPadrao: c.custoPadrao,
+            custoMedio: c.custoMedio,
             custoReal,
             impostos,
             custoComImpostos: custoReal + impostos,
@@ -323,6 +340,7 @@ module.exports = (app) => ({
           tipo: trim(p.tipo),
           um: trim(p.um),
           custoPadrao: toN(p.custoPadrao),
+          custoMedio: toN(p.custoMedio),
           ncm: trim(p.ncm),
           grupo: trim(p.grupo),
           tipoProc: trim(p.tipoProc)
