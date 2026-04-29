@@ -34,6 +34,23 @@ module.exports = (app) => ({
 
     const ip = req.headers['x-forwarded-for'] || req.connection?.remoteAddress || '';
 
+    const dataTermo = trim(b.dataTermo) || new Date().toISOString().slice(0, 10);
+    const params = {
+      uid: user.ID, modo,
+      mat: trim(b.matriculaProtheus) || null,
+      nome, doc: documento,
+      cargo: trim(b.cargo) || null,
+      marca: trim(b.marca) || null,
+      modelo: trim(b.modelo) || null,
+      cor: trim(b.cor) || null,
+      novo: typeof b.novo === 'boolean' ? b.novo : null,
+      acess: trim(b.acessorios) || null,
+      cond: trim(b.condicoes) || null,
+      cidade: trim(b.cidade) || null,
+      dt: dataTermo,
+      ip
+    };
+
     try {
       const r = await Pg.connectAndQuery(
         `INSERT INTO tab_termo_equipamento
@@ -45,23 +62,38 @@ module.exports = (app) => ({
             @marca, @modelo, @cor, @novo, @acess, @cond,
             @cidade, @dt, @ip)
          RETURNING id, criado_em`,
-        {
-          uid: user.ID, modo,
-          mat: trim(b.matriculaProtheus) || null,
-          nome, doc: documento,
-          cargo: trim(b.cargo) || null,
-          marca: trim(b.marca) || null,
-          modelo: trim(b.modelo) || null,
-          cor: trim(b.cor) || null,
-          novo: typeof b.novo === 'boolean' ? b.novo : null,
-          acess: trim(b.acessorios) || null,
-          cond: trim(b.condicoes) || null,
-          cidade: trim(b.cidade) || null,
-          dt: trim(b.dataTermo) || new Date().toISOString().slice(0, 10),
-          ip
-        }
+        params
       );
-      return res.json({ ok: true, id: r[0]?.id, criadoEm: r[0]?.criado_em });
+      const idTermo = r[0]?.id;
+
+      // Tambem registra como equipamento ATIVO em poder do colaborador
+      // (so se tem equipamento minimo: marca ou modelo). Permite controle
+      // de tempo de uso e historico de defeitos. Idempotente — checa se ja
+      // existe registro pra esse termo.
+      let idEquipamento = null;
+      if (idTermo && (params.marca || params.modelo)) {
+        try {
+          const eq = await Pg.connectAndQuery(
+            `INSERT INTO tab_equipamento_atual (
+               documento, nome, matricula_protheus, cargo,
+               marca, modelo, cor, novo, acessorios, condicoes,
+               data_entrega, status, id_termo_origem, registrado_por
+             ) VALUES (
+               @doc, @nome, @mat, @cargo,
+               @marca, @modelo, @cor, @novo, @acess, @cond,
+               @dt, 'ATIVO', @idTermo, @uid
+             )
+             ON CONFLICT DO NOTHING
+             RETURNING id`,
+            { ...params, idTermo }
+          );
+          idEquipamento = eq[0]?.id || null;
+        } catch (e) {
+          console.warn('Termo salvo, mas falhou registrar equipamento atual:', e.message);
+        }
+      }
+
+      return res.json({ ok: true, id: idTermo, criadoEm: r[0]?.criado_em, idEquipamento });
     } catch (err) {
       console.error('Erro salvar termo log:', err);
       return res.status(500).json({ message: 'Erro ao salvar log: ' + err.message });

@@ -6,7 +6,7 @@ module.exports = (app) => ({
 
   handler: async (req, res) => {
     const { Pg, Protheus } = app.services;
-    const { nome, email, senha, matricula, ativo, codigoProtheus, ramal } = req.body || {};
+    const { nome, email, senha, matricula, ativo, codigoProtheus, ramal, permissoes } = req.body || {};
 
     if (!nome || !email || !senha || !matricula) {
       return res.status(400).json({ message: 'Nome, email, senha e matrícula são obrigatórios.' });
@@ -54,8 +54,26 @@ module.exports = (app) => ({
          RETURNING id`,
         { nome, email, senha: senhaHash, matricula, ativo: ativoFlag, codProth: codProth || null, ramal: ramalTrim }
       );
+      const novoId = result[0]?.id;
 
-      return res.status(201).json({ ok: true, id: result[0]?.id });
+      // Permissoes opcionais — array de id_permissao (numeros). Insere em batch.
+      // Aceita perm 0 (admin universal) tambem. Filtra valores nao-numericos.
+      const permsValidas = Array.isArray(permissoes)
+        ? permissoes.map(p => Number(p)).filter(n => Number.isInteger(n))
+        : [];
+      if (novoId && permsValidas.length > 0) {
+        const valuesSql = permsValidas.map((_, i) => `(@uid, @p${i})`).join(',');
+        const params = { uid: novoId };
+        permsValidas.forEach((p, i) => { params[`p${i}`] = p; });
+        await Pg.connectAndQuery(
+          `INSERT INTO tab_intranet_usr_permissoes (id_user, id_permissao)
+           VALUES ${valuesSql}
+           ON CONFLICT DO NOTHING`,
+          params
+        );
+      }
+
+      return res.status(201).json({ ok: true, id: novoId, permissoesAplicadas: permsValidas.length });
     } catch (err) {
       console.error('Erro ao criar usuário:', err);
       return res.status(500).json({ message: 'Erro ao criar usuário.' });
