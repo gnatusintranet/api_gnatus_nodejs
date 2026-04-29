@@ -1,14 +1,15 @@
-// Dashboard de Cobrança — KPIs e agregações sobre titulos a receber.
+// Carteira de Cobranca — substitui a planilha operacional de inadimplencia.
 //
-// Conceitos:
-// - "Faturado no período"   = titulos SE1 emitidos entre inicio/fim, com nota
-//                             fiscal (E1_NUM preenchido) e excluindo RA/NCC.
-// - "Vencido"               = saldo aberto cujo vencimento (E1_VENCREA) ja passou.
-// - "Em aberto (no prazo)"  = saldo aberto cujo vencimento ainda nao chegou.
-// - "Pago"                  = saldo zerado.
-// - "Indice de inadimplencia" = vencido / faturadoTotal * 100, ambos no periodo.
+// Lista todos os titulos em aberto (saldo > 0) na SE1010, exclui RA/NCC,
+// enriquece com:
+//   - Carteira/Equipe atribuidas manualmente (tab_cobranca_atribuicao no PG)
+//   - Ultima acao registrada (tab_cobranca_acao no PG)
+//   - Aging por faixa
+//   - Faturado/Pedido (faturado = E1_NUM <> '', tem NF; pedido = so E1_PEDIDO)
 //
-// Filtros opcionais: cliente, uf, bu (C5_ZTIPO), formaPgto (E1_FORMAPG).
+// Filtros opcionais (todos via querystring):
+//   cliente, uf, bu, formaPgto, carteira, equipe, aging, acao
+//   inicio, fim (recorte por emissao do titulo - opcional)
 
 const trim = (v) => String(v || '').trim();
 const toN  = (v) => Number(v || 0);
@@ -21,26 +22,37 @@ const FORMAS_PGTO = {
 };
 const descreverFormaPgto = (cod) => FORMAS_PGTO[cod] || `Forma ${cod}`;
 
-const faixaAtraso = (dias) => {
-  if (dias <= 0)   return null;                          // não vencido
-  if (dias <= 15)  return { codigo: 'A_1_15',    label: '1-15 dias',  ordem: 1, cor: '#f5a500' };
-  if (dias <= 30)  return { codigo: 'A_16_30',   label: '16-30 dias', ordem: 2, cor: '#e55a1a' };
-  if (dias <= 60)  return { codigo: 'A_31_60',   label: '31-60 dias', ordem: 3, cor: '#c9302c' };
-  if (dias <= 90)  return { codigo: 'A_61_90',   label: '61-90 dias', ordem: 4, cor: '#8a1f1b' };
-  return             { codigo: 'A_90_MAIS', label: '90+ dias',   ordem: 5, cor: '#4a0e0e' };
+// Faixas de aging — usadas em filtros e graficos.
+//   diasAtraso > 0 : titulo vencido
+//   diasAtraso <= 0: titulo a vencer
+const AGING_FAIXAS = [
+  { codigo: 'A_VENCER',  label: 'A vencer',     ordem: 0, cor: '#1e7d4f' },
+  { codigo: 'A_0_30',    label: '1-30 dias',    ordem: 1, cor: '#f5a500' },
+  { codigo: 'A_31_60',   label: '31-60 dias',   ordem: 2, cor: '#e55a1a' },
+  { codigo: 'A_61_90',   label: '61-90 dias',   ordem: 3, cor: '#c9302c' },
+  { codigo: 'A_91_180',  label: '91-180 dias',  ordem: 4, cor: '#8a1f1b' },
+  { codigo: 'A_181_360', label: '181-360 dias', ordem: 5, cor: '#6b0d0d' },
+  { codigo: 'A_360_MAIS',label: '360+ dias',    ordem: 6, cor: '#4a0e0e' }
+];
+
+const classificarAging = (dias) => {
+  if (dias <= 0)  return AGING_FAIXAS[0];
+  if (dias <= 30) return AGING_FAIXAS[1];
+  if (dias <= 60) return AGING_FAIXAS[2];
+  if (dias <= 90) return AGING_FAIXAS[3];
+  if (dias <= 180) return AGING_FAIXAS[4];
+  if (dias <= 360) return AGING_FAIXAS[5];
+  return AGING_FAIXAS[6];
 };
 
-// YYYYMMDD do primeiro dia do mês de "n meses atrás"
-const ymdMesesAtras = (n) => {
-  const d = new Date();
-  d.setDate(1);
-  d.setMonth(d.getMonth() - n);
-  return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}01`;
-};
-
-const ymdHoje = () => {
-  const d = new Date();
-  return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+const semanaIso = (ymd) => {
+  if (!ymd || ymd.length !== 8) return { semana: 0, ano: 0 };
+  const d = new Date(Number(ymd.slice(0, 4)), Number(ymd.slice(4, 6)) - 1, Number(ymd.slice(6, 8)));
+  const ref = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  ref.setUTCDate(ref.getUTCDate() + 4 - (ref.getUTCDay() || 7));
+  const yearStart = new Date(Date.UTC(ref.getUTCFullYear(), 0, 1));
+  const semana = Math.ceil(((ref.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+  return { semana, ano: ref.getUTCFullYear() };
 };
 
 module.exports = (app) => ({
@@ -48,41 +60,41 @@ module.exports = (app) => ({
   route: '/dashboard',
 
   handler: async (req, res) => {
-    const { Protheus } = app.services;
-    const inicio = trim(req.query.inicio);
-    const fim    = trim(req.query.fim);
-
-    if (!/^\d{8}$/.test(inicio) || !/^\d{8}$/.test(fim)) {
-      return res.status(400).json({ message: 'Parâmetros inicio/fim devem ser YYYYMMDD.' });
-    }
-
+    const { Protheus, Pg } = app.services;
     const filial = '01';
-    const hoje = ymdHoje();
 
-    // Filtros opcionais
-    const params = { filial, inicio, fim, hoje, hist6: ymdMesesAtras(5) };
-    const conds = [];
+    // Filtros opcionais para o WHERE da SE1
+    const protheusParams = { filial };
+    const condsProtheus  = [];
 
     if (req.query.cliente) {
-      params.cliente = String(req.query.cliente).toUpperCase();
-      conds.push(`AND (UPPER(sa1.A1_NOME) LIKE '%' + @cliente + '%' OR RTRIM(se1.E1_CLIENTE) = @cliente OR UPPER(RTRIM(se1.E1_NOMCLI)) LIKE '%' + @cliente + '%')`);
+      protheusParams.cliente = String(req.query.cliente).toUpperCase();
+      condsProtheus.push(`AND (UPPER(sa1.A1_NOME) LIKE '%' + @cliente + '%' OR RTRIM(se1.E1_CLIENTE) = @cliente OR UPPER(RTRIM(se1.E1_NOMCLI)) LIKE '%' + @cliente + '%')`);
     }
     if (req.query.uf) {
-      params.uf = String(req.query.uf).toUpperCase();
-      conds.push(`AND RTRIM(sa1.A1_EST) = @uf`);
+      protheusParams.uf = String(req.query.uf).toUpperCase();
+      condsProtheus.push(`AND RTRIM(sa1.A1_EST) = @uf`);
     }
     if (req.query.bu) {
-      params.bu = String(req.query.bu).toUpperCase();
-      conds.push(`AND RTRIM(sc5.C5_ZTIPO) = @bu`);
+      protheusParams.bu = String(req.query.bu).toUpperCase();
+      condsProtheus.push(`AND RTRIM(sc5.C5_ZTIPO) = @bu`);
     }
     if (req.query.formaPgto) {
-      params.formaPgto = String(req.query.formaPgto);
-      conds.push(`AND RTRIM(se1.E1_FORMAPG) = @formaPgto`);
+      protheusParams.formaPgto = String(req.query.formaPgto);
+      condsProtheus.push(`AND RTRIM(se1.E1_FORMAPG) = @formaPgto`);
+    }
+    if (req.query.inicio && /^\d{8}$/.test(String(req.query.inicio))) {
+      protheusParams.inicio = req.query.inicio;
+      condsProtheus.push(`AND se1.E1_EMISSAO >= @inicio`);
+    }
+    if (req.query.fim && /^\d{8}$/.test(String(req.query.fim))) {
+      protheusParams.fim = req.query.fim;
+      condsProtheus.push(`AND se1.E1_EMISSAO <= @fim`);
     }
 
-    // Query principal: titulos faturados no periodo (com NF) + status atual
-    const sqlPeriodo = `
+    const sqlTitulos = `
       SELECT
+        RTRIM(se1.E1_FILIAL)  filial,
         RTRIM(se1.E1_PREFIXO) prefixo,
         RTRIM(se1.E1_NUM)     numero,
         RTRIM(se1.E1_PARCELA) parcela,
@@ -90,11 +102,21 @@ module.exports = (app) => ({
         RTRIM(se1.E1_CLIENTE) clienteCod,
         RTRIM(se1.E1_LOJA)    clienteLoja,
         RTRIM(COALESCE(NULLIF(sa1.A1_NOME, ''), se1.E1_NOMCLI)) clienteNome,
+        RTRIM(sa1.A1_MUN)     clienteMunicipio,
         RTRIM(sa1.A1_EST)     uf,
+        RTRIM(sa1.A1_DDD)     clienteDDD,
+        RTRIM(sa1.A1_TEL)     clienteTel,
+        RTRIM(sa1.A1_EMAIL)   clienteEmail,
+        RTRIM(sa1.A1_VEND)    vendedor,
+        RTRIM(sa3.A3_NOME)    vendedorNome,
+        RTRIM(se1.E1_NATUREZ) natureza,
+        RTRIM(se1.E1_PORTADO) portador,
         RTRIM(se1.E1_FORMAPG) formaPgto,
+        RTRIM(se1.E1_PEDIDO)  pedido,
         RTRIM(sc5.C5_ZTIPO)   buCod,
         RTRIM(bu.X5_DESCRI)   buNome,
         se1.E1_EMISSAO        emissao,
+        se1.E1_VENCTO         vencimentoOriginal,
         se1.E1_VENCREA        vencimento,
         se1.E1_VALOR          valor,
         se1.E1_SALDO          saldo,
@@ -103,188 +125,313 @@ module.exports = (app) => ({
       LEFT JOIN SA1010 sa1 WITH (NOLOCK)
         ON sa1.A1_COD = se1.E1_CLIENTE AND sa1.A1_LOJA = se1.E1_LOJA
        AND sa1.D_E_L_E_T_ <> '*'
+      LEFT JOIN SA3010 sa3 WITH (NOLOCK)
+        ON sa3.A3_COD = sa1.A1_VEND AND sa3.D_E_L_E_T_ <> '*'
       LEFT JOIN SC5010 sc5 WITH (NOLOCK)
         ON sc5.C5_FILIAL = se1.E1_FILIAL AND sc5.C5_NUM = se1.E1_PEDIDO
        AND sc5.D_E_L_E_T_ <> '*'
       LEFT JOIN SX5010 bu WITH (NOLOCK)
-        ON bu.X5_FILIAL = '  ' AND bu.X5_TABELA = 'ZA'
+        ON bu.X5_FILIAL = '  ' AND bu.X5_TABELA = 'Z1'
        AND RTRIM(bu.X5_CHAVE) = RTRIM(sc5.C5_ZTIPO)
        AND bu.D_E_L_E_T_ <> '*'
       WHERE se1.D_E_L_E_T_ <> '*'
         AND se1.E1_FILIAL = @filial
-        AND se1.E1_EMISSAO BETWEEN @inicio AND @fim
+        AND se1.E1_SALDO > 0
         AND RTRIM(se1.E1_TIPO) NOT IN ('RA','NCC')
-        AND RTRIM(se1.E1_NUM) <> ''
-        ${conds.join(' ')}
-      ORDER BY se1.E1_EMISSAO DESC
-    `;
-
-    // Timeline mensal (últimos 6 meses, sempre — independe do filtro de período)
-    const sqlTimeline = `
-      SELECT
-        SUBSTRING(se1.E1_EMISSAO, 1, 6) mes,
-        SUM(se1.E1_VALOR) faturado,
-        SUM(CASE WHEN se1.E1_SALDO > 0
-                  AND DATEDIFF(day, CONVERT(date, se1.E1_VENCREA, 112), GETDATE()) > 0
-                 THEN se1.E1_SALDO ELSE 0 END) vencido,
-        COUNT(*) qtd
-      FROM SE1010 se1 WITH (NOLOCK)
-      LEFT JOIN SA1010 sa1 WITH (NOLOCK)
-        ON sa1.A1_COD = se1.E1_CLIENTE AND sa1.A1_LOJA = se1.E1_LOJA
-       AND sa1.D_E_L_E_T_ <> '*'
-      LEFT JOIN SC5010 sc5 WITH (NOLOCK)
-        ON sc5.C5_FILIAL = se1.E1_FILIAL AND sc5.C5_NUM = se1.E1_PEDIDO
-       AND sc5.D_E_L_E_T_ <> '*'
-      WHERE se1.D_E_L_E_T_ <> '*'
-        AND se1.E1_FILIAL = @filial
-        AND se1.E1_EMISSAO >= @hist6
-        AND RTRIM(se1.E1_TIPO) NOT IN ('RA','NCC')
-        AND RTRIM(se1.E1_NUM) <> ''
-        ${conds.join(' ')}
-      GROUP BY SUBSTRING(se1.E1_EMISSAO, 1, 6)
-      ORDER BY mes
+        ${condsProtheus.join(' ')}
+      ORDER BY se1.E1_VENCREA ASC, se1.E1_VALOR DESC
     `;
 
     try {
-      const [rows, timelineRows] = await Promise.all([
-        Protheus.connectAndQuery(sqlPeriodo, params),
-        Protheus.connectAndQuery(sqlTimeline, params)
-      ]);
+      const rowsP = await Protheus.connectAndQuery(sqlTitulos, protheusParams);
 
-      // Acumuladores
-      let faturadoTotal = 0, abertoTotal = 0, vencidoTotal = 0, pagoTotal = 0;
-      const clientesFaturados = new Set();
-      const clientesInadimplentes = new Set();
-      const porBu = {};
-      const porForma = {};
-      const porFaixa = {};
-      const porCliente = {};   // pra ranking de inadimplentes
+      // Enriquecimento PG (1): atribuicao manual por cliente — agora so carteira/observacao
+      const atribRows = await Pg.connectAndQuery(
+        `SELECT cliente_cod, cliente_loja, carteira, observacao
+           FROM tab_cobranca_atribuicao`,
+        {}
+      );
+      const mapAtrib = new Map();
+      atribRows.forEach(a => {
+        mapAtrib.set(`${trim(a.cliente_cod)}-${trim(a.cliente_loja)}`, {
+          carteira: trim(a.carteira) || null,
+          observacao: a.observacao || null
+        });
+      });
 
-      rows.forEach(r => {
-        const valor = toN(r.valor);
-        const saldo = toN(r.saldo);
-        const dias  = toN(r.diasAtraso);
-        const buKey = trim(r.buCod) || '—';
-        const buNome = trim(r.buNome) || (buKey === '—' ? 'Sem BU' : buKey);
-        const formaKey = trim(r.formaPgto) || '';
-        const formaLabel = descreverFormaPgto(formaKey);
+      // Enriquecimento PG (2): mapeamento BU -> Equipe (substitui aba "apoio")
+      const bueqRows = await Pg.connectAndQuery(
+        `SELECT bu_codigo, equipe FROM tab_cobranca_bu_equipe`,
+        {}
+      );
+      const mapBuEquipe = new Map();
+      bueqRows.forEach(b => mapBuEquipe.set(trim(b.bu_codigo), trim(b.equipe)));
+
+      // Ultima acao por cliente — DISTINCT ON ja resolve no Postgres
+      const acaoRows = await Pg.connectAndQuery(
+        `SELECT DISTINCT ON (cliente_cod, cliente_loja)
+                cliente_cod, cliente_loja, tipo_acao, resultado,
+                data_promessa, valor_prometido, descricao, criado_em
+           FROM tab_cobranca_acao
+          ORDER BY cliente_cod, cliente_loja, criado_em DESC`,
+        {}
+      );
+      const mapAcao = new Map();
+      acaoRows.forEach(a => {
+        mapAcao.set(`${trim(a.cliente_cod)}-${trim(a.cliente_loja)}`, {
+          tipoAcao: a.tipo_acao,
+          resultado: a.resultado,
+          dataPromessa: a.data_promessa,
+          valorPrometido: toN(a.valor_prometido),
+          descricao: a.descricao,
+          criadoEm: a.criado_em
+        });
+      });
+
+      // Filtros pos-enriquecimento (carteira/equipe/aging/acao)
+      const fCarteira = req.query.carteira ? String(req.query.carteira).toUpperCase() : null;
+      const fEquipe   = req.query.equipe   ? String(req.query.equipe)   : null;
+      const fAging    = req.query.aging    ? String(req.query.aging)    : null;
+      const fAcao     = req.query.acao     ? String(req.query.acao)     : null;
+
+      const titulos = [];
+      rowsP.forEach(r => {
         const cliKey = `${trim(r.clienteCod)}-${trim(r.clienteLoja)}`;
-        const isVencido = saldo > 0 && dias > 0;
-        const isAberto  = saldo > 0 && dias <= 0;
-        const isPago    = saldo === 0;
+        const atrib = mapAtrib.get(cliKey) || { carteira: null, observacao: null };
+        const acao  = mapAcao.get(cliKey)  || null;
+        const dias  = toN(r.diasAtraso);
+        const aging = classificarAging(dias);
+        const sem   = semanaIso(trim(r.emissao));
 
-        faturadoTotal += valor;
-        clientesFaturados.add(cliKey);
+        // BU label exatamente como a planilha apoio espera:
+        //   - X5_DESCRI quando existe
+        //   - "<COD> (Desconhecido)" quando SX5 nao tem descricao
+        //   - "(Desconhecido)" quando nem o codigo existe
+        const buCod  = trim(r.buCod);
+        const buNome = trim(r.buNome);
+        const buLabel = buNome || (buCod ? `${buCod} (Desconhecido)` : '(Desconhecido)');
+        const equipe  = mapBuEquipe.get(buLabel) || 'Sem equipe';
 
-        if (isPago)    pagoTotal    += valor;
-        if (isAberto)  abertoTotal  += saldo;
-        if (isVencido) {
-          vencidoTotal += saldo;
-          clientesInadimplentes.add(cliKey);
-        }
+        // Aplica filtros de enriquecimento
+        if (fCarteira && (atrib.carteira || '').toUpperCase() !== fCarteira) return;
+        if (fEquipe   && equipe                                !== fEquipe)   return;
+        if (fAging    && aging.codigo                         !== fAging)    return;
+        if (fAcao     && (acao?.tipoAcao || '')               !== fAcao)     return;
 
-        // Por BU
-        if (!porBu[buKey]) porBu[buKey] = { bu: buKey, label: buNome, faturado: 0, vencido: 0, aberto: 0, qtd: 0 };
-        porBu[buKey].faturado += valor;
-        porBu[buKey].qtd += 1;
-        if (isVencido) porBu[buKey].vencido += saldo;
-        if (isAberto)  porBu[buKey].aberto  += saldo;
-
-        // Por forma de pagamento
-        if (!porForma[formaKey]) porForma[formaKey] = { codigo: formaKey, label: formaLabel, faturado: 0, vencido: 0, aberto: 0, qtd: 0 };
-        porForma[formaKey].faturado += valor;
-        porForma[formaKey].qtd += 1;
-        if (isVencido) porForma[formaKey].vencido += saldo;
-        if (isAberto)  porForma[formaKey].aberto  += saldo;
-
-        // Faixas de atraso (só vencidos)
-        const faixa = faixaAtraso(dias);
-        if (isVencido && faixa) {
-          if (!porFaixa[faixa.codigo]) {
-            porFaixa[faixa.codigo] = { ...faixa, qtd: 0, valor: 0 };
-          }
-          porFaixa[faixa.codigo].qtd += 1;
-          porFaixa[faixa.codigo].valor += saldo;
-        }
-
-        // Top inadimplentes
-        if (isVencido) {
-          if (!porCliente[cliKey]) {
-            porCliente[cliKey] = {
-              clienteCod: trim(r.clienteCod),
-              clienteLoja: trim(r.clienteLoja),
-              clienteNome: trim(r.clienteNome),
-              uf: trim(r.uf),
-              vencido: 0,
-              qtdTitulos: 0,
-              maiorAtraso: 0
-            };
-          }
-          porCliente[cliKey].vencido    += saldo;
-          porCliente[cliKey].qtdTitulos += 1;
-          porCliente[cliKey].maiorAtraso = Math.max(porCliente[cliKey].maiorAtraso, dias);
-        }
+        const numero = trim(r.numero);
+        titulos.push({
+          // Identificacao
+          chave: `${trim(r.filial)}|${trim(r.prefixo)}|${numero}|${trim(r.parcela)}|${cliKey}`,
+          filial: trim(r.filial),
+          prefixo: trim(r.prefixo),
+          numero,
+          parcela: trim(r.parcela),
+          tipo: trim(r.tipo),
+          // Cliente
+          clienteCod: trim(r.clienteCod),
+          clienteLoja: trim(r.clienteLoja),
+          clienteNome: trim(r.clienteNome),
+          clienteMunicipio: trim(r.clienteMunicipio),
+          uf: trim(r.uf),
+          clienteDDD: trim(r.clienteDDD),
+          clienteTel: trim(r.clienteTel),
+          clienteEmail: trim(r.clienteEmail),
+          vendedor: trim(r.vendedor),
+          vendedorNome: trim(r.vendedorNome),
+          // Financeiro
+          natureza: trim(r.natureza),
+          portador: trim(r.portador),
+          formaPgto: trim(r.formaPgto),
+          formaPgtoLabel: descreverFormaPgto(trim(r.formaPgto)),
+          pedido: trim(r.pedido),
+          buCod: buCod || '—',
+          buNome: buLabel,
+          emissao: trim(r.emissao),
+          vencimentoOriginal: trim(r.vencimentoOriginal),
+          vencimento: trim(r.vencimento),
+          valor: toN(r.valor),
+          saldo: toN(r.saldo),
+          diasAtraso: dias,
+          // Aging
+          aging: aging.codigo,
+          agingLabel: aging.label,
+          agingCor: aging.cor,
+          // Faturado vs Pedido
+          temNF: numero !== '',
+          temPedido: trim(r.pedido) !== '',
+          // Atribuicao manual (carteira por cliente) + equipe derivada do BU
+          carteira: atrib.carteira,
+          equipe,
+          observacao: atrib.observacao,
+          // Ultima acao
+          ultimaAcao: acao,
+          // Periodo
+          semana: sem.semana,
+          ano: sem.ano
+        });
       });
 
-      // Adiciona indice de inadimplencia em cada agregação
-      const addIndice = (arr) => arr.map(o => ({
-        ...o,
-        indiceInadimplencia: o.faturado > 0 ? (o.vencido / o.faturado) * 100 : 0
-      }));
+      // KPIs
+      let totalEmAberto = 0, totalVencido = 0, totalAVencer = 0;
+      const clientesUnicos = new Set();
+      const clientesVencidos = new Set();
 
-      const porBuArr    = addIndice(Object.values(porBu)).sort((a, b) => b.faturado - a.faturado);
-      const porFormaArr = addIndice(Object.values(porForma)).sort((a, b) => b.faturado - a.faturado);
-      const porFaixaArr = Object.values(porFaixa).sort((a, b) => a.ordem - b.ordem);
-      const topInadimplentes = Object.values(porCliente)
-        .sort((a, b) => b.vencido - a.vencido)
-        .slice(0, 15);
+      // Agregacoes
+      const porAging    = {};
+      const porCarteira = {};
+      const porEquipe   = {};
+      const porBu       = {};
+      const porCliente  = {};
+      const porSemana   = {};
 
-      const timelineMensal = timelineRows.map(r => {
-        const mes = trim(r.mes);
-        const faturado = toN(r.faturado);
-        const vencido = toN(r.vencido);
-        return {
-          mes,
-          label: `${mes.slice(4, 6)}/${mes.slice(0, 4)}`,
-          faturado,
-          vencido,
-          indiceInadimplencia: faturado > 0 ? (vencido / faturado) * 100 : 0,
-          qtd: toN(r.qtd)
-        };
+      titulos.forEach(t => {
+        const cliKey = `${t.clienteCod}-${t.clienteLoja}`;
+        clientesUnicos.add(cliKey);
+        totalEmAberto += t.saldo;
+        if (t.diasAtraso > 0) {
+          totalVencido += t.saldo;
+          clientesVencidos.add(cliKey);
+        } else {
+          totalAVencer += t.saldo;
+        }
+
+        // Aging
+        if (!porAging[t.aging]) {
+          const f = AGING_FAIXAS.find(x => x.codigo === t.aging);
+          porAging[t.aging] = { codigo: t.aging, label: f.label, cor: f.cor, ordem: f.ordem, qtd: 0, valor: 0 };
+        }
+        porAging[t.aging].qtd += 1;
+        porAging[t.aging].valor += t.saldo;
+
+        // Carteira
+        const carteiraKey = t.carteira || 'SEM_CARTEIRA';
+        const carteiraLabel = t.carteira || 'Sem carteira';
+        if (!porCarteira[carteiraKey]) {
+          porCarteira[carteiraKey] = { carteira: carteiraKey, label: carteiraLabel, qtdTitulos: 0, qtdClientes: new Set(), valor: 0, vencido: 0 };
+        }
+        porCarteira[carteiraKey].qtdTitulos += 1;
+        porCarteira[carteiraKey].qtdClientes.add(cliKey);
+        porCarteira[carteiraKey].valor += t.saldo;
+        if (t.diasAtraso > 0) porCarteira[carteiraKey].vencido += t.saldo;
+
+        // Equipe
+        const equipeKey = t.equipe || 'SEM_EQUIPE';
+        const equipeLabel = t.equipe || 'Sem equipe';
+        if (!porEquipe[equipeKey]) {
+          porEquipe[equipeKey] = { equipe: equipeKey, label: equipeLabel, qtdTitulos: 0, qtdClientes: new Set(), valor: 0, vencido: 0 };
+        }
+        porEquipe[equipeKey].qtdTitulos += 1;
+        porEquipe[equipeKey].qtdClientes.add(cliKey);
+        porEquipe[equipeKey].valor += t.saldo;
+        if (t.diasAtraso > 0) porEquipe[equipeKey].vencido += t.saldo;
+
+        // BU
+        if (!porBu[t.buCod]) porBu[t.buCod] = { bu: t.buCod, label: t.buNome, qtd: 0, valor: 0, vencido: 0 };
+        porBu[t.buCod].qtd += 1;
+        porBu[t.buCod].valor += t.saldo;
+        if (t.diasAtraso > 0) porBu[t.buCod].vencido += t.saldo;
+
+        // Cliente (pra grid agrupada e curva ABC)
+        if (!porCliente[cliKey]) {
+          porCliente[cliKey] = {
+            clienteCod: t.clienteCod,
+            clienteLoja: t.clienteLoja,
+            clienteNome: t.clienteNome,
+            uf: t.uf,
+            municipio: t.clienteMunicipio,
+            email: t.clienteEmail,
+            ddd: t.clienteDDD,
+            tel: t.clienteTel,
+            vendedorNome: t.vendedorNome,
+            carteira: t.carteira,
+            equipe: t.equipe,
+            ultimaAcao: t.ultimaAcao,
+            qtdTitulos: 0,
+            totalEmAberto: 0,
+            totalVencido: 0,
+            maiorAtraso: 0,
+            agingPior: AGING_FAIXAS[0]
+          };
+        }
+        const c = porCliente[cliKey];
+        c.qtdTitulos += 1;
+        c.totalEmAberto += t.saldo;
+        if (t.diasAtraso > 0) {
+          c.totalVencido += t.saldo;
+          if (t.diasAtraso > c.maiorAtraso) c.maiorAtraso = t.diasAtraso;
+          const f = AGING_FAIXAS.find(x => x.codigo === t.aging);
+          if (f && f.ordem > c.agingPior.ordem) c.agingPior = f;
+        }
+
+        // Por semana (timeline temporal)
+        const semKey = `${t.ano}-${String(t.semana).padStart(2, '0')}`;
+        if (!porSemana[semKey]) porSemana[semKey] = { chave: semKey, ano: t.ano, semana: t.semana, valor: 0, qtd: 0 };
+        porSemana[semKey].valor += t.saldo;
+        porSemana[semKey].qtd += 1;
       });
 
-      const indiceInadimplencia = faturadoTotal > 0 ? (vencidoTotal / faturadoTotal) * 100 : 0;
-      const ticketMedio = clientesFaturados.size > 0 ? faturadoTotal / clientesFaturados.size : 0;
+      // Curva ABC (Pareto sobre clientes em aberto)
+      const clientesArr = Object.values(porCliente).sort((a, b) => b.totalEmAberto - a.totalEmAberto);
+      let acumulado = 0;
+      const total = clientesArr.reduce((s, c) => s + c.totalEmAberto, 0);
+      clientesArr.forEach(c => {
+        acumulado += c.totalEmAberto;
+        const pctAcum = total > 0 ? (acumulado / total) * 100 : 0;
+        c.classeABC = pctAcum <= 80 ? 'A' : pctAcum <= 95 ? 'B' : 'C';
+        c.pctAcumulado = pctAcum;
+      });
+
+      const finalize = (arr) => arr.map(o => ({ ...o, qtdClientes: o.qtdClientes.size }));
+      const porCarteiraArr = finalize(Object.values(porCarteira)).sort((a, b) => b.valor - a.valor);
+      const porEquipeArr   = finalize(Object.values(porEquipe)).sort((a, b) => b.valor - a.valor);
+      const porBuArr       = Object.values(porBu).sort((a, b) => b.valor - a.valor);
+      const porAgingArr    = Object.values(porAging).sort((a, b) => a.ordem - b.ordem);
+      const porSemanaArr   = Object.values(porSemana).sort((a, b) => a.chave.localeCompare(b.chave));
+
+      // Resumo ABC
+      const resumoABC = { A: { qtd: 0, valor: 0 }, B: { qtd: 0, valor: 0 }, C: { qtd: 0, valor: 0 } };
+      clientesArr.forEach(c => {
+        resumoABC[c.classeABC].qtd += 1;
+        resumoABC[c.classeABC].valor += c.totalEmAberto;
+      });
+
+      const indiceInadimplencia = totalEmAberto > 0 ? (totalVencido / totalEmAberto) * 100 : 0;
 
       return res.json({
-        periodo: { inicio, fim, hoje },
+        geradoEm: new Date().toISOString(),
         filtros: {
           cliente: req.query.cliente || null,
           uf: req.query.uf || null,
           bu: req.query.bu || null,
-          formaPgto: req.query.formaPgto || null
+          formaPgto: req.query.formaPgto || null,
+          carteira: req.query.carteira || null,
+          equipe: req.query.equipe || null,
+          aging: req.query.aging || null,
+          acao: req.query.acao || null,
+          inicio: req.query.inicio || null,
+          fim: req.query.fim || null
         },
         kpis: {
-          faturadoTotal,
-          faturadoQtdTitulos: rows.length,
-          aberto: abertoTotal,
-          vencido: vencidoTotal,
-          pago: pagoTotal,
-          qtdClientesFaturados: clientesFaturados.size,
-          qtdClientesInadimplentes: clientesInadimplentes.size,
-          indiceInadimplencia,
-          ticketMedio
+          totalEmAberto,
+          totalVencido,
+          totalAVencer,
+          qtdTitulos: titulos.length,
+          qtdClientes: clientesUnicos.size,
+          qtdClientesVencidos: clientesVencidos.size,
+          indiceInadimplencia
         },
+        porAging: porAgingArr,
+        porCarteira: porCarteiraArr,
+        porEquipe: porEquipeArr,
         porBu: porBuArr,
-        porFormaPgto: porFormaArr,
-        porFaixaAtraso: porFaixaArr,
-        timelineMensal,
-        topInadimplentes,
-        geradoEm: new Date().toISOString()
+        porCliente: clientesArr,
+        porSemana: porSemanaArr,
+        resumoABC,
+        titulos
       });
     } catch (err) {
       console.error('Erro cobranca/dashboard:', err);
-      return res.status(500).json({ message: 'Erro ao montar dashboard de cobrança.' });
+      return res.status(500).json({ message: 'Erro ao montar carteira de cobrança.' });
     }
   }
 });
