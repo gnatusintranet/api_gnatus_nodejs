@@ -85,7 +85,11 @@ WSMETHOD GET WSSERVICE GNTNFE
     cFilial := AllTrim(QSF2->F2_FILIAL)
     QSF2->(DbCloseArea())
 
+    // Estrutura confirmada Gnatus (abr/2026):
+    //   F:\TOTVS12\Microsiga\Protheus_Data\<chave>-nfe.xml  (raiz mesmo, sem subpasta)
+    // Path relativo ao rootpath = "\<chave>-nfe.xml"
     aBusca := {}
+    AAdd(aBusca, "\" + cChaveLimpa + "-nfe.xml")                                          // Gnatus padrao atual
     AAdd(aBusca, GetMv("MV_DIRDOC", .F., "") + "\NFE\" + cFilial + "\" + cChaveLimpa + "-procNFe.xml")
     AAdd(aBusca, "\spool\NFE\" + cFilial + "\" + cChaveLimpa + "-procNFe.xml")
     AAdd(aBusca, "\spool\" + cChaveLimpa + "-procNFe.xml")
