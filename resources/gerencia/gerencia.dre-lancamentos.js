@@ -14,6 +14,7 @@ module.exports = (app) => ({
     const natureza = trim(req.query.natureza);
     const inicio   = trim(req.query.inicio);
     const fim      = trim(req.query.fim);
+    const agrupador = (trim(req.query.agrupador) || 'natureza').toLowerCase();
 
     if (!natureza) {
       return res.status(400).json({ message: 'Parâmetro natureza é obrigatório.' });
@@ -21,9 +22,17 @@ module.exports = (app) => ({
     if (!/^\d{8}$/.test(inicio) || !/^\d{8}$/.test(fim)) {
       return res.status(400).json({ message: 'Parâmetros inicio/fim devem ser YYYYMMDD.' });
     }
+    if (!['natureza', 'conta'].includes(agrupador)) {
+      return res.status(400).json({ message: 'agrupador deve ser "natureza" ou "conta".' });
+    }
 
     try {
       const filial = '01';
+      const porConta = agrupador === 'conta';
+      const colCampo = porConta ? 'E2_CONTAD' : 'E2_NATUREZ';
+      // No modo conta, exclui MP (naturezas 201/202/203) que vai pelo CMV.
+      // Evita double-counting com SD2.D2_CUSTO1.
+      const filtroMP = porConta ? `AND LEFT(RTRIM(se2.E2_NATUREZ), 3) NOT IN ('201','202','203')` : '';
 
       const sql = `
         SELECT RTRIM(se2.E2_PREFIXO) prefixo,
@@ -34,6 +43,8 @@ module.exports = (app) => ({
                RTRIM(se2.E2_LOJA)    fornLoja,
                RTRIM(se2.E2_NOMFOR)  fornNome,
                RTRIM(se2.E2_HIST)    historico,
+               RTRIM(se2.E2_NATUREZ) natureza,
+               RTRIM(se2.E2_CONTAD)  conta,
                se2.E2_EMISSAO        emissao,
                se2.E2_VENCTO         vencimento,
                se2.E2_VALOR          valor,
@@ -41,8 +52,9 @@ module.exports = (app) => ({
           FROM SE2010 se2 WITH (NOLOCK)
          WHERE se2.D_E_L_E_T_ <> '*'
            AND se2.E2_FILIAL = @filial
-           AND RTRIM(se2.E2_NATUREZ) = @natureza
+           AND RTRIM(se2.${colCampo}) = @natureza
            AND se2.E2_EMISSAO BETWEEN @inicio AND @fim
+           ${filtroMP}
          ORDER BY se2.E2_EMISSAO, se2.E2_VALOR DESC
       `;
       const rows = await Protheus.connectAndQuery(sql, { filial, natureza, inicio, fim });
@@ -59,6 +71,8 @@ module.exports = (app) => ({
           fornLoja: trim(r.fornLoja),
           fornNome: trim(r.fornNome),
           historico: trim(r.historico),
+          natureza: trim(r.natureza),
+          conta: trim(r.conta),
           emissao: trim(r.emissao),
           vencimento: trim(r.vencimento),
           valor,
@@ -70,7 +84,8 @@ module.exports = (app) => ({
       const totalValor = lancamentos.reduce((s, l) => s + l.valor, 0);
 
       return res.json({
-        natureza,
+        natureza,           // codigo passado (pode ser natureza OU conta)
+        agrupador,
         periodo: { inicio, fim },
         qtd: lancamentos.length,
         totalValor,

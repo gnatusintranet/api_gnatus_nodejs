@@ -1,0 +1,89 @@
+// Baixa anexo do banco de Conhecimento (TOTVS Documents) — clones do
+// resources/aprovacoes/aprovacoes.anexo.js mas exposto sob /sac/anexo
+// pra respeitar a perm 6001 (SAC) em vez de 13001 (Aprovacoes).
+//
+// InternalId = 2 espacos + AC9_CODOBJ (10 chars) — formato observado
+// empiricamente na Gnatus.
+
+const trim = (v) => String(v || '').trim();
+
+const mimeFromExt = (name) => {
+  const ext = (name.match(/\.([a-z0-9]+)$/i) || [, ''])[1].toLowerCase();
+  const map = {
+    pdf: 'application/pdf',
+    txt: 'text/plain; charset=utf-8',
+    csv: 'text/csv',
+    xml: 'application/xml',
+    json: 'application/json',
+    jpg: 'image/jpeg', jpeg: 'image/jpeg',
+    png: 'image/png', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
+    doc: 'application/msword',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    xls: 'application/vnd.ms-excel',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    ppt: 'application/vnd.ms-powerpoint',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    zip: 'application/zip', rar: 'application/vnd.rar', '7z': 'application/x-7z-compressed',
+    msg: 'application/vnd.ms-outlook', eml: 'message/rfc822'
+  };
+  return map[ext] || 'application/octet-stream';
+};
+
+module.exports = (app) => ({
+  verb: 'get',
+  route: '/anexo/:codObj',
+
+  handler: async (req, res) => {
+    const user = req.user && req.user[0];
+    if (!user) return res.status(401).json({ message: 'Não autenticado.' });
+
+    const codObj = trim(req.params.codObj);
+    if (!codObj || codObj.length !== 10) {
+      return res.status(400).json({ message: 'codObj inválido (deve ter 10 chars).' });
+    }
+
+    const apiUrl  = process.env.PROTHEUS_API_URL;
+    const apiUser = process.env.PROTHEUS_API_USER;
+    const apiPass = process.env.PROTHEUS_API_PASS;
+    if (!apiUrl || !apiUser || !apiPass) {
+      return res.status(503).json({ message: 'API Protheus não configurada.' });
+    }
+
+    const internalId = '  ' + codObj;
+    const url = apiUrl.replace(/\/$/, '') + '/api/crm/v1/documents/' + encodeURIComponent(internalId);
+    const auth = 'Basic ' + Buffer.from(`${apiUser}:${apiPass}`).toString('base64');
+
+    try {
+      const r = await fetch(url, { headers: { Authorization: auth, Accept: 'application/json' } });
+      const txt = await r.text();
+      if (!r.ok) {
+        return res.status(r.status === 404 ? 404 : 502).json({
+          message: 'Erro ao buscar anexo no Protheus.',
+          status: r.status,
+          body: txt.slice(0, 500)
+        });
+      }
+      let json;
+      try { json = JSON.parse(txt); } catch { return res.status(502).json({ message: 'Resposta TOTVS inválida.' }); }
+
+      const knw = (json.ListOfKnowledge || [])[0];
+      if (!knw || !knw.EncodeDocument) {
+        return res.status(404).json({ message: 'Documento sem conteúdo binário.' });
+      }
+
+      const fileName = trim(knw.FileName) || `anexo_${codObj}.bin`;
+      const buffer = Buffer.from(knw.EncodeDocument, 'base64');
+      const mime = mimeFromExt(fileName);
+
+      const safeName = fileName.replace(/[^\x20-\x7E]/g, '_');
+      res.setHeader('Content-Type', mime);
+      res.setHeader('Content-Length', buffer.length);
+      res.setHeader('Content-Disposition',
+        `inline; filename="${safeName}"; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+      res.setHeader('Cache-Control', 'private, max-age=300');
+      return res.end(buffer);
+    } catch (err) {
+      return res.status(500).json({ message: 'Erro ao baixar anexo: ' + err.message });
+    }
+  }
+});

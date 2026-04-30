@@ -21,12 +21,11 @@ const CFOPS_VENDA = ['5105','5106','5116','5117','5119','5405','5933',
 
 const CFOPS_DEVOLUCAO = ['1202','2202','1411','2411','1553','2553'];
 
+// ---------- AGRUPADOR: NATUREZA (gerencial) ----------
 // Classificação dos prefixos de natureza em linhas do DRE.
 // IMPORTANTE: 201/202/203 (MP Nacional/Importada/Desembaraço) NÃO entram em
 // Despesas Operacionais — esses custos são absorvidos via CMV (D2_CUSTO1)
 // quando o PA correspondente é vendido. Somá-los aqui causaria double-counting.
-// Eles aparecem em uma seção separada "Compras de Insumos do Período" só pra
-// referência; não impactam EBIT/Lucro Líquido.
 const MAPA_DESPESAS = {
   '204': { ordem: 1, label: 'Serviços Tomados' },
   '205': { ordem: 2, label: 'Despesas com Pessoal' },
@@ -43,6 +42,22 @@ const MAPA_INSUMOS = {
 };
 const GRUPO_FINANCEIRO = '211';
 const GRUPO_IMPOSTOS   = '208';
+
+// ---------- AGRUPADOR: CONTA CONTÁBIL (contabil) ----------
+// Plano de contas Gnatus (formato 11 chars):
+//   1xxx = Ativo (NÃO entra no DRE)
+//   2xxx = Passivo (NÃO entra no DRE)
+//   3xxx = Receita (vem da SD2.D2_CONTA)
+//   4xxx = Despesas/Custos (vem da SE2.E2_CONTAD)
+//
+// Despesas (SE2.E2_CONTAD) — agrupadas por prefixo 4 chars:
+const MAPA_DESPESAS_CONTA = {
+  '4110': { ordem: 1, label: 'Despesas Operacionais' },
+  '4120': { ordem: 2, label: 'Outras Despesas Operacionais' }
+};
+const GRUPO_FINANCEIRO_CONTA = '4140';   // Despesas Financeiras
+// Títulos com conta começando com 1xxx ou 2xxx são Ativo/Passivo (não vão
+// pro DRE) — listamos em "outrasDespesas" só pra controle.
 
 // Classificação heurística da natureza 211 (Financeiro). Como a Gnatus não
 // subdivide a natureza no Protheus (tudo cai em 21101), inferimos pelo
@@ -77,6 +92,11 @@ module.exports = (app) => ({
     const { Protheus } = app.services;
     const inicio = trim(req.query.inicio); // YYYYMMDD
     const fim    = trim(req.query.fim);
+    const agrupador = (trim(req.query.agrupador) || 'natureza').toLowerCase();
+    if (!['natureza', 'conta'].includes(agrupador)) {
+      return res.status(400).json({ message: 'agrupador deve ser "natureza" ou "conta".' });
+    }
+    const porConta = agrupador === 'conta';
 
     if (!/^\d{8}$/.test(inicio) || !/^\d{8}$/.test(fim)) {
       return res.status(400).json({ message: 'Parâmetros inicio/fim devem ser YYYYMMDD.' });
@@ -158,8 +178,34 @@ module.exports = (app) => ({
         devolucoes.total += v;
       });
 
-      // ---------- 3) Despesas (SE2) com descrição da natureza ----------
-      const sqlDespesas = `
+      // ---------- 3) Despesas (SE2) — agrupadas por natureza OU conta contabil ----------
+      // Quando agrupador = 'natureza': agrupa por SE2.E2_NATUREZ (visao gerencial)
+      // Quando agrupador = 'conta': agrupa por SE2.E2_CONTAD (visao contabil — bate com a contabilidade)
+      //
+      // IMPORTANTE no modo conta: excluimos titulos de naturezas 201/202/203
+      // (Materia-Prima Nacional/Importada/Desembaraco). Eles podem ter conta
+      // 4110 (Despesas Operacionais) lancada na SE2, mas a contabilidade trata
+      // MP como ESTOQUE -> CMV. Incluir aqui causaria double-counting com o
+      // CMV que ja vem da SD2.D2_CUSTO1.
+      const sqlDespesas = porConta
+        ? `
+        SELECT RTRIM(se2.E2_CONTAD) natureza,
+               MAX(RTRIM(ct1.CT1_DESC01)) descricao,
+               COUNT(*) qtd,
+               SUM(se2.E2_VALOR) valor
+          FROM SE2010 se2 WITH (NOLOCK)
+          LEFT JOIN CT1010 ct1 WITH (NOLOCK)
+            ON RTRIM(ct1.CT1_CONTA) = RTRIM(se2.E2_CONTAD)
+           AND ct1.D_E_L_E_T_ <> '*'
+         WHERE se2.D_E_L_E_T_ <> '*'
+           AND se2.E2_FILIAL = @filial
+           AND se2.E2_EMISSAO BETWEEN @inicio AND @fim
+           AND RTRIM(se2.E2_CONTAD) <> ''
+           AND LEFT(RTRIM(se2.E2_NATUREZ), 3) NOT IN ('201','202','203')
+         GROUP BY se2.E2_CONTAD
+         ORDER BY SUM(se2.E2_VALOR) DESC
+      `
+        : `
         SELECT RTRIM(se2.E2_NATUREZ) natureza,
                MAX(RTRIM(sed.ED_DESCRIC)) descricao,
                COUNT(*) qtd,
@@ -182,8 +228,14 @@ module.exports = (app) => ({
       // amortização de empréstimos com juros reais). Auditoria gerada na rota
       // /gerencia/dre/auditoria-211 lista cada lançamento para a contabilidade
       // reclassificar no Protheus.
+      // Filtra titulos de Financeiro: prefixo natureza '211' OU prefixo conta '4140'
+      // No modo conta, exclui MP (mesma regra de cima — evita double-counting com CMV)
+      const filtroFinanc = porConta
+        ? `LEFT(RTRIM(se2.E2_CONTAD), 4) = '${GRUPO_FINANCEIRO_CONTA}' AND LEFT(RTRIM(se2.E2_NATUREZ), 3) NOT IN ('201','202','203')`
+        : `LEFT(RTRIM(se2.E2_NATUREZ), 3) = '${GRUPO_FINANCEIRO}'`;
       const sql211 = `
         SELECT RTRIM(se2.E2_NATUREZ) natureza,
+               RTRIM(se2.E2_CONTAD)  conta,
                RTRIM(se2.E2_PREFIXO) prefixo,
                RTRIM(se2.E2_NUM)     numero,
                RTRIM(se2.E2_PARCELA) parcela,
@@ -199,7 +251,7 @@ module.exports = (app) => ({
          WHERE se2.D_E_L_E_T_ <> '*'
            AND se2.E2_FILIAL = @filial
            AND se2.E2_EMISSAO BETWEEN @inicio AND @fim
-           AND LEFT(RTRIM(se2.E2_NATUREZ), 3) = '${GRUPO_FINANCEIRO}'
+           AND ${filtroFinanc}
          ORDER BY se2.E2_VALOR DESC
       `;
       const titulos211 = await Protheus.connectAndQuery(sql211, { filial, inicio, fim });
@@ -240,18 +292,60 @@ module.exports = (app) => ({
       const detalhesImpostos = [];
       const outrasDespesas = [];      // naturezas que não entram em nenhum grupo
 
+      // Classificação varia conforme agrupador.
+      // Natureza: prefixo 3 chars (204, 205, 211, 208, etc)
+      // Conta:    prefixo 4 chars (4110, 4140, etc — só 4xxx entra no DRE)
+      const tamPref = porConta ? 4 : 3;
+      const grupoFinanceiro = porConta ? GRUPO_FINANCEIRO_CONTA : GRUPO_FINANCEIRO;
+      const mapaDespesas = porConta ? MAPA_DESPESAS_CONTA : MAPA_DESPESAS;
+
       despesasRows.forEach(r => {
-        const cod = trim(r.natureza);
+        const cod = trim(r.natureza);   // 'natureza' aqui pode ser conta tb (alias do SQL)
         const descricao = trim(r.descricao) || '(sem descrição)';
         const valor = toN(r.valor);
         const qtd = toN(r.qtd);
         if (!cod || valor === 0) return;
 
-        const pref = cod.slice(0, 3);
+        const pref = cod.slice(0, tamPref);
 
-        // 211 (Financeiro) já foi tratado em sql211 acima — pula
-        if (pref === GRUPO_FINANCEIRO) return;
+        // Financeiro ja foi tratado em sql211 acima — pula
+        if (pref === grupoFinanceiro) return;
 
+        if (porConta) {
+          // Modo CONTA: prefixos 1xxx (Ativo) e 2xxx (Passivo) NÃO entram no DRE
+          // Esses são titulos como adiantamento a fornecedor, emprestimo bancario, tributos a recolher
+          // Ficam em "outrasDespesas" só pra controle (informativo)
+          const primeiroDigito = cod.slice(0, 1);
+          if (primeiroDigito === '1' || primeiroDigito === '2') {
+            outrasDespesas.push({ natureza: cod, descricao, qtd, valor });
+            return;
+          }
+
+          if (mapaDespesas[pref]) {
+            if (!gruposDespesas[pref]) {
+              gruposDespesas[pref] = {
+                codigo: pref, label: mapaDespesas[pref].label, ordem: mapaDespesas[pref].ordem,
+                total: 0, naturezas: []
+              };
+            }
+            gruposDespesas[pref].total += valor;
+            gruposDespesas[pref].naturezas.push({ natureza: cod, descricao, qtd, valor });
+          } else {
+            // Conta 4xxx fora do mapa — agrupa em "Outras Despesas Operacionais"
+            const generic = '4OUT';
+            if (!gruposDespesas[generic]) {
+              gruposDespesas[generic] = {
+                codigo: generic, label: 'Outras Despesas (não classificadas)', ordem: 99,
+                total: 0, naturezas: []
+              };
+            }
+            gruposDespesas[generic].total += valor;
+            gruposDespesas[generic].naturezas.push({ natureza: cod, descricao, qtd, valor });
+          }
+          return;
+        }
+
+        // ===== Modo NATUREZA =====
         if (pref === GRUPO_IMPOSTOS) {
           totalImpostos += valor;
           detalhesImpostos.push({ natureza: cod, descricao, qtd, valor });
@@ -262,11 +356,8 @@ module.exports = (app) => ({
         if (MAPA_INSUMOS[pref]) {
           if (!gruposInsumos[pref]) {
             gruposInsumos[pref] = {
-              codigo: pref,
-              label: MAPA_INSUMOS[pref].label,
-              ordem: MAPA_INSUMOS[pref].ordem,
-              total: 0,
-              naturezas: []
+              codigo: pref, label: MAPA_INSUMOS[pref].label, ordem: MAPA_INSUMOS[pref].ordem,
+              total: 0, naturezas: []
             };
           }
           gruposInsumos[pref].total += valor;
@@ -277,11 +368,8 @@ module.exports = (app) => ({
         if (MAPA_DESPESAS[pref]) {
           if (!gruposDespesas[pref]) {
             gruposDespesas[pref] = {
-              codigo: pref,
-              label: MAPA_DESPESAS[pref].label,
-              ordem: MAPA_DESPESAS[pref].ordem,
-              total: 0,
-              naturezas: []
+              codigo: pref, label: MAPA_DESPESAS[pref].label, ordem: MAPA_DESPESAS[pref].ordem,
+              total: 0, naturezas: []
             };
           }
           gruposDespesas[pref].total += valor;
@@ -311,6 +399,7 @@ module.exports = (app) => ({
 
       return res.json({
         periodo: { inicio, fim },
+        agrupador,
         geradoEm: new Date().toISOString(),
 
         receitaBruta: { total: receitaBruta.total, detalhes: receitaBruta.detalhes },
