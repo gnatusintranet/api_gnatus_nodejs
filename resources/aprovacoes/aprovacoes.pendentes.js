@@ -120,37 +120,63 @@ module.exports = (app) => ({
       const pcNums = [...new Set(scrPendentes.filter(s => s.tipoUI === 'PC').map(s => trim(s.numero)))];
       const BATCH = 500;
 
+      // Helpers pra buscar dados resumidos (cabecalho) + itens completos
       const scInfo = new Map();
+      const scItens = new Map();  // numero -> [{ item, produto, descricao, quantidade, unidade, valorTotal }]
       for (let i = 0; i < scNums.length; i += BATCH) {
         const slice = scNums.slice(i, i + BATCH);
         const inSc = slice.map((_, k) => `@s${k}`).join(',');
         const p = {};
         slice.forEach((n, k) => { p[`s${k}`] = n; });
         try {
+          // Cabecalho agregado
           const r = await Protheus.connectAndQuery(
             `SELECT RTRIM(C1_NUM) numero,
                     MIN(C1_EMISSAO) emissao,
                     MAX(RTRIM(C1_SOLICIT)) solicitante,
                     SUM(C1_TOTAL) total,
-                    COUNT(*) qtdItens,
-                    MIN(RTRIM(C1_PRODUTO)) produto,
-                    MIN(RTRIM(C1_DESCRI)) descricao
+                    COUNT(*) qtdItens
                FROM SC1010 WITH (NOLOCK)
               WHERE D_E_L_E_T_ <> '*' AND C1_FILIAL = '01' AND C1_NUM IN (${inSc})
               GROUP BY C1_NUM`,
             p
           );
           r.forEach(x => scInfo.set(trim(x.numero), x));
+
+          // Itens detalhados
+          const it = await Protheus.connectAndQuery(
+            `SELECT RTRIM(C1_NUM) numero, RTRIM(C1_ITEM) item,
+                    RTRIM(C1_PRODUTO) produto, RTRIM(C1_DESCRI) descricao,
+                    RTRIM(C1_UM) unidade, C1_QUANT quantidade, C1_TOTAL valorTotal
+               FROM SC1010 WITH (NOLOCK)
+              WHERE D_E_L_E_T_ <> '*' AND C1_FILIAL = '01' AND C1_NUM IN (${inSc})
+              ORDER BY C1_NUM, C1_ITEM`,
+            p
+          );
+          it.forEach(x => {
+            const num = trim(x.numero);
+            if (!scItens.has(num)) scItens.set(num, []);
+            scItens.get(num).push({
+              item: trim(x.item),
+              produto: trim(x.produto),
+              descricao: trim(x.descricao),
+              unidade: trim(x.unidade),
+              quantidade: toN(x.quantidade),
+              valorTotal: toN(x.valorTotal)
+            });
+          });
         } catch (e) { console.warn('SC info batch err:', e.message); }
       }
 
       const pcInfo = new Map();
+      const pcItens = new Map();
       for (let i = 0; i < pcNums.length; i += BATCH) {
         const slice = pcNums.slice(i, i + BATCH);
         const inPc = slice.map((_, k) => `@s${k}`).join(',');
         const p = {};
         slice.forEach((n, k) => { p[`s${k}`] = n; });
         try {
+          // Cabecalho agregado
           const r = await Protheus.connectAndQuery(
             `SELECT RTRIM(sc7.C7_NUM) numero,
                     MIN(sc7.C7_EMISSAO) emissao,
@@ -167,6 +193,31 @@ module.exports = (app) => ({
             p
           );
           r.forEach(x => pcInfo.set(trim(x.numero), x));
+
+          // Itens detalhados
+          const it = await Protheus.connectAndQuery(
+            `SELECT RTRIM(C7_NUM) numero, RTRIM(C7_ITEM) item,
+                    RTRIM(C7_PRODUTO) produto, RTRIM(C7_DESCRI) descricao,
+                    RTRIM(C7_UM) unidade, C7_QUANT quantidade,
+                    C7_PRECO preco, C7_TOTAL valorTotal
+               FROM SC7010 WITH (NOLOCK)
+              WHERE D_E_L_E_T_ <> '*' AND C7_FILIAL = '01' AND C7_NUM IN (${inPc})
+              ORDER BY C7_NUM, C7_ITEM`,
+            p
+          );
+          it.forEach(x => {
+            const num = trim(x.numero);
+            if (!pcItens.has(num)) pcItens.set(num, []);
+            pcItens.get(num).push({
+              item: trim(x.item),
+              produto: trim(x.produto),
+              descricao: trim(x.descricao),
+              unidade: trim(x.unidade),
+              quantidade: toN(x.quantidade),
+              preco: toN(x.preco),
+              valorTotal: toN(x.valorTotal)
+            });
+          });
         } catch (e) { console.warn('PC info batch err:', e.message); }
       }
 
@@ -213,6 +264,7 @@ module.exports = (app) => ({
         const key = `${tipo}|${num}`;
         if (!map.has(key)) {
           const info = tipo === 'SC' ? scInfo.get(num) : pcInfo.get(num);
+          const itens = tipo === 'SC' ? (scItens.get(num) || []) : (pcItens.get(num) || []);
           map.set(key, {
             tipo, numero: num, valor: toN(s.valor),
             grupo: trim(s.grupo),
@@ -220,10 +272,10 @@ module.exports = (app) => ({
             niveis: [],
             emissao: info ? trim(info.emissao) : '',
             solicitanteOuComprador: tipo === 'SC' ? (info ? trim(info.solicitante) : '') : (info ? trim(info.comprador) : ''),
-            descricao: tipo === 'SC' && info ? trim(info.descricao) : '',
             fornecedor: tipo === 'PC' && info ? trim(info.fornecedor) : '',
-            qtdItens: info ? toN(info.qtdItens) : 0,
+            qtdItens: info ? toN(info.qtdItens) : itens.length,
             totalDoc: (info && toN(info.total)) ? toN(info.total) : toN(s.valor),
+            itens,
             anexos: anexos.get(key) || []
           });
         }
